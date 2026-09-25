@@ -1,0 +1,41 @@
+{
+  "name": "@app/api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json && concurrently -r \"tsc -p tsconfig.json -w --preserveWatchOutput\" \"node --watch-path=dist --enable-source-maps dist/main.js\"",
+    "dev:worker": "tsc -p tsconfig.json && node --watch-path=dist --enable-source-maps dist/worker.js",
+    "start": "node --enable-source-maps dist/main.js",
+    "start:worker": "node --enable-source-maps dist/worker.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@app/config": "workspace:*",
+    "@app/pipeline": "workspace:*",
+    "@app/shared": "workspace:*",
+    "@app/types": "workspace:*",
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.6",
+    "@prisma/client": "~6.19.0",
+    "bullmq": "^5.58.0",
+    "multer": "^2.4.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "concurrently": "^9.1.0",
+    "prisma": "~6.19.0"
+  }
+}

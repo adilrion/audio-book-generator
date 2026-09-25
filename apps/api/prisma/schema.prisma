@@ -1,0 +1,200 @@
+// PostgreSQL schema. Big artifacts (audio, video, page images, full extraction) live on
+// disk in the content-addressed cache; the database holds structure, state and progress
+// so the pipeline can resume after failure and the UI can show everything.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  PENDING
+  EXTRACTING
+  CLEANING
+  ANALYZING
+  GENERATING_AUDIO
+  PREPARING_VIDEO
+  RENDERING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+/// One uploaded PDF (deduplicated by content hash; many projects can share it).
+model Document {
+  id             String    @id @default(uuid())
+  hash           String    @unique
+  fileName       String
+  filePath       String
+  fileSize       BigInt
+  pageCount      Int
+  estimatedWords Int
+  title          String?
+  author         String?
+  likelyScanned  Boolean   @default(false)
+  hasToc         Boolean   @default(false)
+  encrypted      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  projects       Project[]
+  pages          Page[]
+}
+
+model Page {
+  id         String   @id @default(uuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  number     Int
+  width      Float
+  height     Float
+
+  @@unique([documentId, number])
+}
+
+model Project {
+  id               String            @id @default(uuid())
+  name             String
+  documentId       String
+  document         Document          @relation(fields: [documentId], references: [id])
+  settings         Json
+  status           JobStatus         @default(PENDING)
+  progress         Float             @default(0)
+  /// Latest ProgressSnapshot (stage, message, current chapter, user-facing error)
+  snapshot         Json?
+  analysisKey      String?
+  cancelRequested  Boolean           @default(false)
+  durationSec      Float?
+  outputs          Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  chapters         Chapter[]
+  steps            ProcessingStep[]
+  audioChunks      AudioChunk[]
+  timelineSegments TimelineSegment[]
+  renderJobs       RenderJob[]
+
+  @@index([createdAt])
+}
+
+model Chapter {
+  id         String      @id @default(uuid())
+  projectId  String
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  index      Int
+  title      String
+  pageStart  Int
+  pageEnd    Int
+  source     String
+  paragraphs Paragraph[]
+
+  @@unique([projectId, index])
+}
+
+model Paragraph {
+  id        String     @id @default(uuid())
+  chapterId String
+  chapter   Chapter    @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  index     Int
+  kind      String
+  text      String
+  pageStart Int
+  pageEnd   Int
+  /// PageRegion[] — highlight rectangles per page
+  regions   Json
+  sentences Sentence[]
+
+  @@unique([chapterId, index])
+}
+
+model Sentence {
+  id          String    @id @default(uuid())
+  paragraphId String
+  paragraph   Paragraph @relation(fields: [paragraphId], references: [id], onDelete: Cascade)
+  /// stable pipeline id, e.g. c3-p12-s1
+  key         String
+  index       Int
+  text        String
+  narration   String
+  regions     Json
+
+  @@index([key])
+}
+
+/// One synthesized chapter (FLAC in storage/audio, content-addressed by cacheKey).
+model AudioChunk {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chapterIndex Int
+  file         String
+  durationSec  Float
+  sampleRate   Int
+  cacheKey     String
+  engine       String
+  voice        String
+  createdAt    DateTime @default(now())
+
+  @@unique([projectId, chapterIndex])
+}
+
+model TimelineSegment {
+  id           String  @id @default(uuid())
+  projectId    String
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  idx          Int
+  sentenceKey  String
+  chapterIndex Int
+  page         Int
+  start        Float
+  end          Float
+  rects        Json
+
+  @@index([projectId, start])
+}
+
+/// One queued processing run (process / resume / retry / restart).
+model RenderJob {
+  id         String    @id @default(uuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  queueJobId String?
+  force      Boolean   @default(false)
+  status     JobStatus @default(PENDING)
+  error      Json?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@index([projectId, createdAt])
+}
+
+/// Persisted pipeline step (EXTRACT, TTS_CHAPTER_3, VIDEO_CHAPTER_3, MUX ...).
+model ProcessingStep {
+  id           String     @id @default(uuid())
+  projectId    String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  key          String
+  stage        String
+  status       StepStatus @default(PENDING)
+  progress     Int        @default(0)
+  cached       Boolean    @default(false)
+  chapterIndex Int?
+  message      String?
+  error        Json?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  order        Int        @default(0)
+
+  @@unique([projectId, key])
+}

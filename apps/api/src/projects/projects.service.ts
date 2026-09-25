@@ -1,0 +1,315 @@
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { Inject, Injectable } from '@nestjs/common';
+import type { Prisma, Project, Document } from '@prisma/client';
+import { CachePaths, cleanProjectCache, deleteProjectFiles, type OutputRecord } from '@app/pipeline';
+import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
+import {
+  ASPECT_SIZES,
+  resolveSettings,
+  type DeepPartial,
+  type OutputFile,
+  type PdfInspection,
+  type ProgressSnapshot,
+  type ProjectDetail,
+  type ProjectSettings,
+  type ProjectSummary,
+  type StepRecord,
+} from '@app/types';
+import { APP_CONFIG, type AppConfig } from '../common/config.provider';
+import { badRequest, conflict, notFound } from '../common/errors';
+import { PrismaService } from '../prisma/prisma.service';
+import { QueueService } from '../queue/queue.service';
+import { PythonService } from '../system/python.service';
+import { settingsSchema } from './settings.schema';
+
+const ACTIVE = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
+type ProjectWithDoc = Project & { document: Document };
+
+@Injectable()
+export class ProjectsService {
+  private readonly paths: CachePaths;
+
+  constructor(
+    @Inject(APP_CONFIG) private readonly cfg: AppConfig,
+    private readonly prisma: PrismaService,
+    private readonly queue: QueueService,
+    private readonly python: PythonService,
+  ) {
+    this.paths = new CachePaths(cfg);
+  }
+
+  // ── create ───────────────────────────────────────────────
+  async create(file: Express.Multer.File, rawSettings?: string, name?: string): Promise<ProjectDetail> {
+    if (!file) throw badRequest('Please choose a PDF file to upload.');
+    try {
+      const fd = await fsp.open(file.path, 'r');
+      const head = Buffer.alloc(5);
+      await fd.read(head, 0, 5, 0);
+      await fd.close();
+      if (head.toString('latin1') !== '%PDF-') throw badRequest('This file is not a PDF.', 'Choose a .pdf file.');
+
+      const hash = await sha256File(file.path);
+      const dest = this.paths.upload(hash);
+      if (await exists(dest)) await fsp.rm(file.path, { force: true });
+      else await fsp.rename(file.path, dest);
+
+      let info: PdfInspection;
+      try {
+        info = await this.python.call<PdfInspection>('pdf.inspect', { path: dest });
+      } catch (e) {
+        throw toAppError(e);
+      }
+      const settings = this.parseSettings(rawSettings);
+      if (info.likelyScanned && settings.text.ocr === 'off')
+        throw badRequest('This PDF is a scan (images only). Enable OCR to process it.');
+
+      const doc = await this.prisma.document.upsert({
+        where: { hash },
+        create: {
+          hash,
+          fileName: file.originalname,
+          filePath: dest,
+          fileSize: BigInt(info.fileSize),
+          pageCount: info.pageCount,
+          estimatedWords: info.estimatedWords,
+          title: info.title,
+          author: info.author,
+          likelyScanned: info.likelyScanned,
+          hasToc: info.hasToc,
+          encrypted: info.encrypted,
+        },
+        update: { fileName: file.originalname, filePath: dest },
+      });
+      const projectName = (name?.trim() || info.title || file.originalname.replace(/\.pdf$/i, '')).slice(0, 200);
+      const project = await this.prisma.project.create({
+        data: { name: projectName, documentId: doc.id, settings: settings as unknown as Prisma.InputJsonValue },
+        include: { document: true },
+      });
+      return this.detail(project.id);
+    } finally {
+      await fsp.rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private parseSettings(raw?: string | object, base?: ProjectSettings): ProjectSettings {
+    let input: unknown = raw ?? {};
+    if (typeof raw === 'string') {
+      try {
+        input = raw.trim() ? JSON.parse(raw) : {};
+      } catch {
+        throw badRequest('Settings are not valid JSON.');
+      }
+    }
+    const parsed = settingsSchema.safeParse(input);
+    if (!parsed.success) throw badRequest(`Invalid settings: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+    const p = parsed.data as DeepPartial<ProjectSettings> & { text?: { chapterRange?: unknown } };
+    if (p.text && p.text.chapterRange === null) {
+      delete (p.text as { chapterRange?: unknown }).chapterRange;
+      if (base) base = { ...base, text: { ...base.text, chapterRange: undefined } };
+    }
+    if (p.video?.aspectRatio && !p.video.width) Object.assign(p.video, ASPECT_SIZES[p.video.aspectRatio]);
+    const merged = resolveSettings(p, base);
+    if (merged.language === 'bn' && merged.tts.engine === 'kokoro')
+      throw badRequest('Bangla narration needs a Bangla-capable TTS voice, which is not installed yet.', 'See README → "How to add another TTS model".');
+    return merged;
+  }
+
+  // ── read ─────────────────────────────────────────────────
+  async list(): Promise<ProjectSummary[]> {
+    const rows = await this.prisma.project.findMany({ include: { document: true }, orderBy: { createdAt: 'desc' }, take: 200 });
+    return rows.map((p) => this.summary(p));
+  }
+
+  private summary(p: ProjectWithDoc): ProjectSummary {
+    return {
+      id: p.id,
+      name: p.name,
+      fileName: p.document.fileName,
+      status: p.status,
+      progress: p.progress,
+      createdAt: p.createdAt.toISOString(),
+      updatedAt: p.updatedAt.toISOString(),
+      pageCount: p.document.pageCount,
+      wordCount: p.document.estimatedWords,
+      durationSec: p.durationSec ?? undefined,
+    };
+  }
+
+  async get(id: string): Promise<ProjectWithDoc> {
+    const p = await this.prisma.project.findUnique({ where: { id }, include: { document: true } });
+    if (!p) throw notFound('Project');
+    return p;
+  }
+
+  snapshot(p: Project): ProgressSnapshot {
+    return (p.snapshot as unknown as ProgressSnapshot) ?? { status: p.status, progress: p.progress, updatedAt: p.updatedAt.toISOString() };
+  }
+
+  async detail(id: string): Promise<ProjectDetail> {
+    const p = await this.get(id);
+    const [steps, chapters, audio] = await Promise.all([
+      this.steps(id),
+      this.prisma.chapter.findMany({ where: { projectId: id }, orderBy: { index: 'asc' } }),
+      this.prisma.audioChunk.findMany({ where: { projectId: id } }),
+    ]);
+    const dur = new Map(audio.map((a) => [a.chapterIndex, a.durationSec]));
+    const d = p.document;
+    return {
+      ...this.summary(p),
+      settings: resolveSettings(p.settings as DeepPartial<ProjectSettings>),
+      document: {
+        hash: d.hash,
+        fileName: d.fileName,
+        pageCount: d.pageCount,
+        encrypted: d.encrypted,
+        needsPassword: false,
+        title: d.title ?? undefined,
+        author: d.author ?? undefined,
+        estimatedWords: d.estimatedWords,
+        likelyScanned: d.likelyScanned,
+        hasToc: d.hasToc,
+        fileSize: Number(d.fileSize),
+      },
+      snapshot: this.snapshot(p),
+      steps,
+      outputs: await this.outputs(id),
+      chapters: chapters.map((c) => ({ index: c.index, title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd, durationSec: dur.get(c.index) })),
+    };
+  }
+
+  async steps(id: string): Promise<StepRecord[]> {
+    const rows = await this.prisma.processingStep.findMany({ where: { projectId: id }, orderBy: [{ order: 'asc' }, { key: 'asc' }] });
+    return rows.map((r) => ({
+      key: r.key,
+      stage: r.stage as StepRecord['stage'],
+      status: r.status,
+      progress: r.progress,
+      cached: r.cached,
+      chapterIndex: r.chapterIndex ?? undefined,
+      message: r.message ?? undefined,
+      error: (r.error as unknown as StepRecord['error']) ?? undefined,
+      startedAt: r.startedAt?.toISOString(),
+      finishedAt: r.finishedAt?.toISOString(),
+    }));
+  }
+
+  async status(id: string) {
+    const p = await this.get(id);
+    const s = this.snapshot(p);
+    return { ...s, status: p.status, progress: p.progress };
+  }
+
+  async outputs(id: string): Promise<OutputFile[]> {
+    const dir = this.paths.output(id);
+    const out: OutputFile[] = [];
+    const known: [string, OutputFile['kind']][] = [
+      ['audiobook.mp4', 'video'],
+      ['audiobook.m4a', 'audio'],
+      ['subtitles.srt', 'subtitles'],
+      ['chapters.txt', 'timeline'],
+    ];
+    for (const [name, kind] of known) {
+      const st = await fsp.stat(path.join(dir, name)).catch(() => null);
+      if (st?.isFile()) out.push({ name, kind, size: st.size, url: `/projects/${id}/output/${name}` });
+    }
+    return out;
+  }
+
+  outputPath(id: string, name: string): string {
+    if (!/^[a-z0-9._-]+$/i.test(name) || name.startsWith('.')) throw notFound('File');
+    return path.join(this.paths.output(id), name);
+  }
+
+  async timelinePath(id: string): Promise<string> {
+    await this.get(id);
+    const f = path.join(this.paths.output(id), 'timeline.json');
+    if (!(await exists(f))) throw new AppError('NOT_READY', 'The timeline is not ready yet — it is created after audio generation.', { retryable: false });
+    return f;
+  }
+
+  async pageImage(id: string, page: number): Promise<string> {
+    const p = await this.get(id);
+    if (!Number.isInteger(page) || page < 1 || page > p.document.pageCount) throw notFound('Page');
+    const out = this.paths.preview(p.document.hash, page);
+    if (!(await exists(out))) await this.python.call('pdf.render_preview', { path: p.document.filePath, page, scale: 1.6, outPath: out });
+    return out;
+  }
+
+  // ── actions ──────────────────────────────────────────────
+  async updateSettings(id: string, raw: unknown): Promise<ProjectDetail> {
+    const p = await this.get(id);
+    if (ACTIVE.includes(p.status)) throw conflict('Settings cannot be changed while the project is processing.');
+    const merged = this.parseSettings(raw as object, resolveSettings(p.settings as DeepPartial<ProjectSettings>));
+    await this.prisma.project.update({ where: { id }, data: { settings: merged as unknown as Prisma.InputJsonValue } });
+    return this.detail(id);
+  }
+
+  /** Start / resume / retry. Finished steps are reused from cache automatically. */
+  async process(id: string, force = false): Promise<{ jobId: string }> {
+    const p = await this.get(id);
+    if (ACTIVE.includes(p.status)) throw conflict('This project is already processing.');
+    const pending = await this.prisma.renderJob.findFirst({ where: { projectId: id, status: 'PENDING' } });
+    if (pending) throw conflict('This project is already queued.');
+    if (!fs.existsSync(p.document.filePath)) throw new AppError('PDF_MISSING', 'The uploaded PDF file is missing from storage. Please upload it again.', { retryable: false });
+    if (force) {
+      await this.prisma.processingStep.deleteMany({ where: { projectId: id } });
+      await rmOutputsKeepNothing(this.paths.output(id));
+    }
+    const rj = await this.prisma.renderJob.create({ data: { projectId: id, force } });
+    try {
+      const jobId = await this.queue.enqueue({ projectId: id, renderJobId: rj.id, force });
+      await this.prisma.renderJob.update({ where: { id: rj.id }, data: { queueJobId: jobId } });
+      await this.prisma.project.update({
+        where: { id },
+        data: {
+          status: 'PENDING',
+          cancelRequested: false,
+          snapshot: { status: 'PENDING', progress: p.progress, message: 'Waiting for the worker…', updatedAt: new Date().toISOString() } as Prisma.InputJsonValue,
+        },
+      });
+      return { jobId };
+    } catch (e) {
+      await this.prisma.renderJob.delete({ where: { id: rj.id } }).catch(() => undefined);
+      throw e;
+    }
+  }
+
+  async cancel(id: string) {
+    const p = await this.get(id);
+    if (p.status === 'PENDING') {
+      await this.prisma.renderJob.updateMany({ where: { projectId: id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+    }
+    await this.prisma.project.update({ where: { id }, data: { cancelRequested: true, ...(p.status === 'PENDING' ? { status: 'CANCELLED' } : {}) } });
+    return { ok: true };
+  }
+
+  async cleanCache(id: string) {
+    const p = await this.get(id);
+    if (ACTIVE.includes(p.status)) throw conflict('Stop processing before cleaning the cache.');
+    const freedBytes = await cleanProjectCache(this.cfg, id, p.document.hash);
+    await this.prisma.processingStep.deleteMany({ where: { projectId: id } });
+    await this.prisma.project.update({ where: { id }, data: { analysisKey: null } });
+    return { freedBytes };
+  }
+
+  async remove(id: string, deleteOutputs: boolean) {
+    const p = await this.get(id);
+    if (ACTIVE.includes(p.status)) throw conflict('Stop processing before deleting the project.');
+    const others = await this.prisma.project.count({ where: { documentId: p.documentId, NOT: { id } } });
+    await deleteProjectFiles(this.cfg, id, p.document.hash, { deleteOutputs, deleteUpload: others === 0 });
+    await this.prisma.project.delete({ where: { id } });
+    if (others === 0) await this.prisma.document.delete({ where: { id: p.documentId } }).catch(() => undefined);
+    return { ok: true, outputsKept: !deleteOutputs };
+  }
+
+  async manifest(id: string) {
+    return readJsonIfExists<OutputRecord[]>(path.join(this.paths.output(id), 'manifest.json'));
+  }
+}
+
+/** Restart: drop derived per-project files (timeline, manifest). Final outputs are overwritten on success. */
+async function rmOutputsKeepNothing(dir: string) {
+  for (const f of ['manifest.json', 'timeline.json']) await fsp.rm(path.join(dir, f), { force: true });
+}

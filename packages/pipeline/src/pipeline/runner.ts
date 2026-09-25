@@ -9,6 +9,7 @@ import {
   atomicWriteJson,
   exists,
   fileSize,
+  formatDuration,
   hashKey,
   mapLimit,
   readJson,
@@ -509,7 +510,7 @@ export class PipelineRunner {
     }
 
     const results = await mapLimit(plans, this.cfg.MAX_CONCURRENT_TTS, async (p) => {
-      const label = `${chapterLabel(p.c)}: ${p.c.title}`;
+      const label = /^(chapter|part|section)\b/i.test(p.c.title) ? `“${p.c.title}”` : `${chapterLabel(p.c)} “${p.c.title}”`;
       return this.step(
         `TTS_CHAPTER_${p.c.index + 1}`,
         'TTS',
@@ -551,7 +552,7 @@ export class PipelineRunner {
             await atomicWriteJson(p.files.meta, audio);
             done.set(p.c.index, p.segments.length);
             await this.store.saveChapterAudio(audio);
-            return { value: audio, cached: false, message: `${Math.round(r.durationSec / 60)} min` };
+            return { value: audio, cached: false, message: formatDuration(r.durationSec) };
           } catch (err) {
             if (err instanceof CancelledError) throw err;
             const base = toAppError(err);
