@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+coverage/
+
+# Python
+workers/processing/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Local storage (large generated files)
+storage/**
+!storage/**/
+!storage/**/.gitkeep

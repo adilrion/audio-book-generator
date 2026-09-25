@@ -1,0 +1,17 @@
+{
+  "name": "@app/cli",
+  "version": "0.1.0",
+  "private": true,
+  "bin": { "audiobook": "dist/main.js" },
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@app/config": "workspace:*",
+    "@app/pipeline": "workspace:*",
+    "@app/shared": "workspace:*",
+    "@app/types": "workspace:*"
+  }
+}

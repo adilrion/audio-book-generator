@@ -1,0 +1,38 @@
+{
+  "name": "pdf-audiobook",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first PDF to read-along audiobook video generator (Apple Silicon optimized)",
+  "packageManager": "pnpm@11.8.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build:packages": "tsc -b packages/types packages/config packages/shared packages/pipeline",
+    "build": "pnpm build:packages && pnpm --filter @app/api build && pnpm --filter @app/cli build && pnpm --filter @app/web build",
+    "dev": "pnpm build:packages && concurrently -n packages,api,worker,web -c gray,blue,magenta,green \"tsc -b -w --preserveWatchOutput packages/pipeline\" \"pnpm --filter @app/api dev\" \"pnpm --filter @app/api dev:worker\" \"pnpm --filter @app/web dev\"",
+    "dev:api": "pnpm --filter @app/api dev",
+    "dev:worker": "pnpm --filter @app/api dev:worker",
+    "dev:web": "pnpm --filter @app/web dev",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down",
+    "db:migrate": "pnpm --filter @app/api prisma:migrate",
+    "db:generate": "pnpm --filter @app/api prisma:generate",
+    "setup:python": "bash scripts/setup-python.sh",
+    "setup:models": "bash scripts/download-models.sh",
+    "doctor": "pnpm build:packages && pnpm --filter @app/cli exec node dist/main.js doctor",
+    "audiobook": "pnpm build:packages && pnpm --filter @app/cli build >/dev/null && node apps/cli/dist/main.js create",
+    "audiobook:create": "pnpm build:packages && pnpm --filter @app/cli build >/dev/null && node apps/cli/dist/main.js create",
+    "test": "pnpm test:ts && pnpm test:py",
+    "test:ts": "vitest run",
+    "test:py": "cd workers/processing && .venv/bin/python -m pytest -q",
+    "typecheck": "pnpm build:packages && pnpm -r typecheck",
+    "clean": "rm -rf packages/*/dist apps/*/dist apps/web/.next packages/*/tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "typescript": "~5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
