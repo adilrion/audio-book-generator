@@ -2,6 +2,7 @@ import { Controller, Get, Inject, Query } from '@nestjs/common';
 import { DEFAULT_VOICES, checkLocalEnvironment, createTTSProvider, ttsEngineNames } from '@app/pipeline';
 import { DEFAULT_SETTINGS, type HealthCheck, type HealthReport, type VoiceInfo } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
+import { badRequest } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { PythonService } from './python.service';
@@ -38,6 +39,8 @@ export class SystemController {
   @Get('voices')
   async voices(@Query('engine') engine?: string): Promise<{ engine: string; available: boolean; message: string; voices: VoiceInfo[] }> {
     const name = engine ?? this.cfg.TTS_ENGINE;
+    const engines = ttsEngineNames();
+    if (!engines.includes(name)) throw badRequest(`Unknown voice engine "${name.slice(0, 40)}".`, `Choose one of: ${engines.join(', ')}.`);
     const provider = createTTSProvider(name, this.python.pool);
     const st = await provider.isAvailable();
     return { engine: name, available: st.ok, message: st.message, voices: st.ok ? await provider.listVoices() : [] };

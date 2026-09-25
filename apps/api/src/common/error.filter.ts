@@ -7,6 +7,8 @@ const STATUS: Record<string, number> = {
   NOT_FOUND: 404,
   BAD_REQUEST: 400,
   CONFLICT: 409,
+  NOT_READY: 409, // e.g. timeline requested before audio generation finished
+  PDF_MISSING: 410, // uploaded file was removed from storage — user must upload again
   PDF_CORRUPT: 422,
   PDF_UNSUPPORTED: 422,
   PDF_PASSWORD: 422,
@@ -17,6 +19,7 @@ const STATUS: Record<string, number> = {
   REDIS_UNAVAILABLE: 503,
   PYTHON_MISSING: 503,
   DISK_SPACE: 507,
+  DISK_FULL: 507, // ENOSPC mapped by toAppError()
 };
 
 /** Users get { error: { code, message, hint } }; technical details only go to the log. */

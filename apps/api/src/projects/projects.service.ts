@@ -43,17 +43,23 @@ export class ProjectsService {
   // ── create ───────────────────────────────────────────────
   async create(file: Express.Multer.File, rawSettings?: string, name?: string): Promise<ProjectDetail> {
     if (!file) throw badRequest('Please choose a PDF file to upload.');
+    let hash = '';
+    let moved: string | undefined; // PDF this request moved into storage/uploads, until a Document owns it
     try {
       const fd = await fsp.open(file.path, 'r');
       const head = Buffer.alloc(5);
       await fd.read(head, 0, 5, 0);
       await fd.close();
       if (head.toString('latin1') !== '%PDF-') throw badRequest('This file is not a PDF.', 'Choose a .pdf file.');
+      const settings = this.parseSettings(rawSettings); // validate before touching storage
 
-      const hash = await sha256File(file.path);
+      hash = await sha256File(file.path);
       const dest = this.paths.upload(hash);
       if (await exists(dest)) await fsp.rm(file.path, { force: true });
-      else await fsp.rename(file.path, dest);
+      else {
+        await fsp.rename(file.path, dest);
+        moved = dest;
+      }
 
       let info: PdfInspection;
       try {
@@ -61,7 +67,6 @@ export class ProjectsService {
       } catch (e) {
         throw toAppError(e);
       }
-      const settings = this.parseSettings(rawSettings);
       if (info.likelyScanned && settings.text.ocr === 'off')
         throw badRequest('This PDF is a scan (images only). Enable OCR to process it.');
 
@@ -82,15 +87,26 @@ export class ProjectsService {
         },
         update: { fileName: file.originalname, filePath: dest },
       });
+      moved = undefined;
       const projectName = (name?.trim() || info.title || file.originalname.replace(/\.pdf$/i, '')).slice(0, 200);
       const project = await this.prisma.project.create({
         data: { name: projectName, documentId: doc.id, settings: settings as unknown as Prisma.InputJsonValue },
         include: { document: true },
       });
       return this.detail(project.id);
+    } catch (e) {
+      if (moved) await this.discardUpload(moved, hash);
+      throw e;
     } finally {
       await fsp.rm(file.path, { force: true }).catch(() => undefined);
     }
+  }
+
+  /** A rejected upload (password, corrupt, scan without OCR…) must not leave an orphaned PDF in storage. */
+  private async discardUpload(file: string, hash: string) {
+    // Keep it if a Document owns it (e.g. a concurrent upload of the same file) or the DB can't tell us.
+    const owner = await this.prisma.document.findUnique({ where: { hash }, select: { id: true } }).catch(() => ({ id: '?' }));
+    if (!owner) await fsp.rm(file, { force: true }).catch(() => undefined);
   }
 
   private parseSettings(raw?: string | object, base?: ProjectSettings): ProjectSettings {
