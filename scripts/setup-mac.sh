@@ -8,7 +8,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/setup-mac.sh [options]        (or: pnpm setup [options])
+Usage: bash scripts/setup-mac.sh [options]    (or: pnpm run setup [options] — plain `pnpm setup` is a pnpm built-in)
 
 Does, in order (skipping anything already done):
   1. checks macOS / Apple Silicon, Homebrew, Node.js >= 20.11 and pnpm >= 11

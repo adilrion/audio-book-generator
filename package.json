@@ -18,6 +18,7 @@
     "infra:down": "docker compose down",
     "db:migrate": "pnpm --filter @app/api prisma:migrate",
     "db:generate": "pnpm --filter @app/api prisma:generate",
+    "setup": "bash scripts/setup-mac.sh",
     "setup:python": "bash scripts/setup-python.sh",
     "setup:models": "bash scripts/download-models.sh",
     "doctor": "pnpm build:packages && pnpm --filter @app/cli exec node dist/main.js doctor",

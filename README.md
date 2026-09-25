@@ -1,0 +1,939 @@
+# PDF Audiobook — read-along audiobook videos from PDF books, fully local
+
+Turn a PDF book into a **YouTube-ready read-along video**: the original PDF pages on screen, a natural
+local voice reading the book, and the sentence being spoken highlighted on the page as the narration
+moves. Everything runs on your own Mac, with no cloud APIs and no paid services. It is tuned for an
+**Apple M4 with 16 GB of unified memory**.
+
+```text
+book.pdf  ──►  audiobook.mp4   1920×1080 H.264 + AAC, highlighted pages, chapter markers, soft subtitles
+               audiobook.m4a   loudness-normalized narration with chapter markers
+               subtitles.srt   sentence-level subtitles
+               chapters.txt    "0:00 Chapter 1 …" lines for a YouTube description
+```
+
+> Only process and distribute books you have the legal right to use. See [Copyright](#copyright).
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [Why it is built this way](#why-it-is-built-this-way)
+- [Requirements](#requirements)
+- [Setup on macOS (Apple Silicon)](#setup-on-macos-apple-silicon)
+  - [One-shot setup](#one-shot-setup)
+  - [Manual setup](#manual-setup)
+  - [Ollama (local LLM)](#ollama-local-llm)
+  - [TTS engines](#tts-engines)
+  - [FFmpeg](#ffmpeg)
+  - [PostgreSQL and Redis](#postgresql-and-redis)
+- [Configuration (environment variables)](#configuration-environment-variables)
+- [Development commands](#development-commands)
+- [CLI](#cli)
+- [HTTP API](#http-api)
+- [Processing pipeline](#processing-pipeline)
+- [Storage layout](#storage-layout)
+- [Troubleshooting](#troubleshooting)
+- [Performance tuning for a 16 GB Mac](#performance-tuning-for-a-16-gb-mac)
+- [Extending](#extending)
+- [Testing](#testing)
+- [Copyright](#copyright)
+- [Scope of V1](#scope-of-v1)
+- [Repository layout](#repository-layout)
+
+Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
+## Features
+
+- **Accurate PDF-to-text mapping.** PyMuPDF extracts every word with its bounding box. Each sentence
+  keeps the exact rectangles of the words it is printed with, including words hyphenated across lines
+  or pages, so the highlight lands on the real text instead of an approximation.
+- **Careful text cleaning.** Running headers and footers, page numbers, table-of-contents leader lines,
+  overprinted duplicates and line-break hyphenation are removed with deterministic, position-aware
+  rules. The printed text is never rewritten. Only what the voice *says* is normalized
+  (`e.g.` → "for example", footnote markers are dropped, and so on).
+- **Chapter detection in a fixed order:** PDF outline, then textual patterns (`Chapter 3`, `PART ONE`,
+  `Prologue`), then heading font sizes, then the local LLM (only for ambiguous structure), then about
+  12-page sections as a fallback.
+- **Local LLM used sparingly.** [Ollama](https://ollama.com) (`qwen3:4b` by default) is only asked
+  small structured-JSON questions: which heading candidates start chapters, how to repair visibly
+  damaged sentences, and (opt-in) how to pronounce names. It never sees the whole book, and nothing
+  depends on it being there.
+- **Local TTS:** Kokoro-82M (default), Piper (optional), or the built-in macOS `say` voices. Engines
+  sit behind a `TTSProvider` interface.
+- **Sample-exact sync.** Each chapter is synthesized sentence by sentence into one FLAC file, so every
+  sentence's start and end time comes from sample counts. No forced alignment is needed and there is
+  no drift.
+- **Read-along video:** a camera that follows the narration with eased pans and a dead zone, a subtle
+  zoom, a page cross-fade, marker/underline/box highlights, an optional progress bar and chapter title
+  cards, 16:9, 9:16 or 1:1, encoded with the Apple VideoToolbox hardware encoder.
+- **Resumable and cached.** Every chapter's audio and video is a content-addressed artifact. An
+  interrupted 10-hour book resumes at the chapter where it stopped. Changing the video theme re-renders
+  video only, and changing the voice never redoes PDF or LLM work.
+- **Resource-aware on 16 GB.** You set the number of TTS, render, LLM and project jobs that may run
+  at once. Python model processes are shut down between stages to give memory back. Audio and video
+  are streamed to disk and never held in RAM.
+- **Understandable errors.** Users see "Audio generation failed for Chapter 7. Retry to continue from
+  Chapter 7" instead of `ECONNREFUSED 127.0.0.1:6379`. Technical details go to the logs.
+- **Three ways to use it:** a Next.js dashboard, a NestJS HTTP API with a BullMQ job queue, and a CLI
+  that needs no database or Redis.
+
+---
+
+## Quick start
+
+On an Apple Silicon Mac with [Homebrew](https://brew.sh), Node.js 20.11 or newer and Docker (Docker
+Desktop or OrbStack) installed:
+
+```bash
+pnpm install              # needs pnpm 11 (see Requirements)
+pnpm run setup            # one-shot setup: brew deps, .env, Postgres/Redis, Python venv, models, build, doctor
+                          # (use `pnpm run setup`, not `pnpm setup`: that is a pnpm built-in command)
+
+pnpm audiobook ./book.pdf # CLI: writes ./output/audiobook.mp4, audiobook.m4a, subtitles.srt, chapters.txt
+pnpm dev                  # API :4000 + worker + web UI on http://localhost:3000
+```
+
+If you don't have a book at hand, the CLI can generate a small sample:
+`node apps/cli/dist/main.js sample ./sample-book.pdf`.
+
+---
+
+## Architecture
+
+A modular monolith with local worker processes. Only Postgres and Redis run in Docker. Everything
+compute-heavy runs natively on macOS so it can use the CPU cores and the hardware media encoder.
+
+```text
+ Browser
+   │
+   ▼
+┌──────────────────────┐  HTTP (JSON, multipart upload, Range downloads)
+│ Next.js web UI       │─────────────────────────────┐
+│ apps/web  :3000      │                             │
+└──────────────────────┘                             ▼
+                                        ┌──────────────────────────────┐      ┌───────────────────┐
+  pnpm audiobook ./book.pdf             │ NestJS API  apps/api  :4000  │─────►│ PostgreSQL :5433  │
+  (CLI, apps/cli: no DB,                │ projects, settings, status,  │ Prisma│ (Docker)          │
+   no Redis, JSON FileStore)            │ outputs, page previews       │      │ projects, steps,  │
+          │                             └──────────────┬───────────────┘      │ chapters, timeline│
+          │                                            │ BullMQ enqueue       └─────────▲─────────┘
+          │                                            ▼                                │
+          │                             ┌──────────────────────────────┐                │ PrismaStore
+          │                             │ Redis :6379 (Docker)         │                │ (progress,
+          │                             │ queue "audiobook"            │                │  entities)
+          │                             └──────────────┬───────────────┘                │
+          │                                            │ 1 job = 1 project run          │
+          │                                            ▼                                │
+          │                             ┌──────────────────────────────┐                │
+          │                             │ Worker process               │────────────────┘
+          │                             │ apps/api/dist/worker.js      │
+          │                             │ concurrency = MAX_CONCURRENT_PROJECTS
+          │                             └──────────────┬───────────────┘
+          ▼                                            ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PipelineRunner  (packages/pipeline, TypeScript)                                              │
+│  EXTRACT → CLEAN → ANALYZE → TTS_CHAPTER_n → AUDIO_MERGE → TIMELINE → VIDEO_CHAPTER_n → MUX  │
+│  text cleaning · paragraphs · sentences (ICU) · chapters · timeline · SRT · FFmpeg mastering │
+│  content-addressed cache ──► storage/  (uploads, extracted, audio, renders, output)          │
+│         │                                  │                                  │              │
+│         │ JSON lines over stdin/stdout     │ HTTP /api/chat (structured JSON) │ spawn        │
+│         ▼                                  ▼                                  ▼              │
+│  PythonPool (1 process per concurrent   Ollama :11434 (native)          ffmpeg / ffprobe     │
+│  unit; models stay loaded)              qwen3:4b, optional               concat, loudnorm,   │
+│   ├─ pdf.*   PyMuPDF extract / render                                    AAC, final mux      │
+│   ├─ tts.*   Kokoro ONNX · Piper · say  → chapter FLAC + sentence timings                    │
+│   └─ video.* OpenCV compositor ──raw BGR frames──► ffmpeg h264_videotoolbox → chapter .mp4   │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Part | Location | Role |
+|---|---|---|
+| Web UI | `apps/web` | Next.js 15, Tailwind 4, shadcn/ui dashboard: upload, settings, progress, preview, downloads |
+| API | `apps/api/src/main.ts` | NestJS 11 HTTP API on `127.0.0.1:${API_PORT}`. Never does heavy work inside a request |
+| Worker | `apps/api/src/worker.ts` | Separate Node process consuming the BullMQ queue and running `PipelineRunner` |
+| CLI | `apps/cli` | Runs the same `PipelineRunner` directly with a JSON `FileStore` |
+| Pipeline | `packages/pipeline` | Orchestration, text processing, LLM helper, TTS registry, timeline, FFmpeg, health checks |
+| Domain types | `packages/types` | `ProjectSettings`, `StepRecord`, `Timeline`, `Analysis` … shared by every app |
+| Config | `packages/config` | Loads and validates `.env` with zod and resolves storage paths |
+| Shared | `packages/shared` | `AppError`, hashing, atomic file writes, semaphore, logger |
+| Python worker | `workers/processing` | JSON-lines RPC server: PyMuPDF, TTS engines, frame compositor and encoder |
+| Infra | `docker-compose.yml` | Postgres 17 and Redis 7 only |
+
+---
+
+## Why it is built this way
+
+| Decision | Reason |
+|---|---|
+| **Python only for PyMuPDF, TTS and frame rendering** | Those libraries (PyMuPDF, onnxruntime/Kokoro, Piper, OpenCV) are much better in Python. Everything else (cleaning, chapters, sentences, timeline, caching, orchestration, API) is TypeScript, so it can be tested and shared with the UI and API. |
+| **One long-lived Python process per concurrent unit** | Each process handles one request at a time over JSON lines and keeps its model loaded between chapters. Parallelism comes from a bounded `PythonPool` (`MAX_CONCURRENT_TTS`, `MAX_CONCURRENT_PDF_RENDER`). Pools are **shut down between stages**, so the Kokoro sessions are released before video rendering starts. Cancelling kills the process, which is the only reliable way to stop a CPU-bound call. |
+| **Per-chapter FLAC with sample-exact sentence timings, not forced alignment** | Sentences are synthesized one by one and appended to a chapter FLAC with controlled pauses. A sentence's start and end are sample positions, so the timing is exact by construction, with no aligner model, no memory cost and no drift. Word timings, when requested, are estimated from word lengths inside the exact sentence window. |
+| **Frames composited with OpenCV and piped to FFmpeg `h264_videotoolbox`** | A frame is one `warpAffine` of a pre-rendered page plus small highlight blends. Unchanged frames are reused. Raw BGR frames go straight to FFmpeg's stdin, and the M4 media engine encodes them with little CPU, so there are no PNG sequences on disk. |
+| **Chapter video segments joined with stream copy, plus one AAC track** | Each chapter segment has exactly `round(end·fps) − round(start·fps)` frames, derived from absolute times, so the segments add up to the audio length. The final MP4 concatenates them without re-encoding (`-c:v copy`) and adds the single mastered AAC track (`-c:a copy`). Muxing audio per chapter would build up AAC priming and padding drift. The output is then validated with ffprobe (A/V drift ≤ 2 frames + 0.1 s). |
+| **Docker only for Postgres and Redis** | Docker on macOS runs a Linux VM with no Metal, Neural Engine or VideoToolbox access and a memory cap. TTS, LLM and rendering have to run natively to be fast. |
+| **Postgres mapped to host port 5433** | Avoids a clash with a local Postgres.app or Homebrew Postgres on 5432. |
+| **Content-addressed cache** | Every stage's output is keyed by a hash of exactly the inputs that matter to it. That gives resume, retry, cross-project reuse and "theme change re-renders video only" without any bookkeeping. |
+| **Kokoro on CPU, not CoreML** | Measured on the M4: the CoreML execution provider was slower (RTF 0.23) than plain CPU (RTF 0.21). |
+
+---
+
+## Requirements
+
+| Requirement | Version / notes |
+|---|---|
+| macOS on Apple Silicon | Developed on an M4 with 16 GB and macOS 15. Intel Macs work but are slower. |
+| Homebrew | Installs to `/opt/homebrew`. Use a native arm64 terminal, not Rosetta. |
+| Node.js | ≥ 20.11 (`engines` in `package.json`; developed with Node 24) |
+| pnpm | **11.x**. The workspace relies on pnpm 11's `allowBuilds` to run Prisma/esbuild install scripts. |
+| Python | 3.10–3.12 (3.12 recommended: `brew install python@3.12`) |
+| FFmpeg | Homebrew build (includes `h264_videotoolbox` and `aac_at`) |
+| Docker | Docker Desktop, OrbStack or colima. Only needed for the API/UI (Postgres + Redis); the CLI does not need it. |
+| Ollama | Optional. Local LLM for ambiguous chapters and damaged text. |
+| Tesseract | Optional. OCR for scanned pages. |
+| Disk | ~355 MB for Kokoro, a few GB for `qwen3:4b`, plus working space per book (see [disk space](#not-enough-disk-space)) |
+
+---
+
+## Setup on macOS (Apple Silicon)
+
+### One-shot setup
+
+```bash
+pnpm install          # first time only, so that `pnpm run` works
+pnpm run setup        # = bash scripts/setup-mac.sh
+```
+
+`scripts/setup-mac.sh` is idempotent: re-running it skips everything that is already in place, and it
+never deletes anything. In order, it:
+
+1. checks macOS, Apple Silicon (and refuses to run under Rosetta), Homebrew, Node ≥ 20.11 and pnpm ≥ 11;
+2. runs `brew install` for whatever is missing: `ffmpeg`, `python@3.12`, and optionally `tesseract` and `ollama`;
+3. copies `.env.example` → `.env` if there is no `.env` yet, and links `apps/api/.env → ../../.env`
+   (the Prisma CLI runs inside `apps/api`);
+4. `pnpm install`;
+5. `docker compose up -d postgres redis`, waits until both are healthy, then `prisma generate` and `prisma migrate deploy`;
+6. `scripts/setup-python.sh` (Python venv + requirements);
+7. `scripts/download-models.sh` (Kokoro; Piper and the Ollama model if requested). If Ollama is
+   installed but not running, it is started with `brew services start ollama`;
+8. builds the TypeScript packages, the CLI and the API;
+9. runs the doctor.
+
+| Flag | Effect |
+|---|---|
+| `--no-ollama` | Skip Ollama and its model (the pipeline then uses rules only) |
+| `--no-ocr` | Skip Tesseract |
+| `--with-piper` | Also install the Piper engine and the `en_US-lessac-medium` voice |
+| `--skip-brew` | Install nothing with Homebrew; only report what is missing |
+| `--skip-infra` | Don't start Docker or run migrations (CLI-only setups) |
+| `--skip-python`, `--skip-models`, `--skip-build`, `--skip-doctor` | Skip that step |
+
+Pass flags through pnpm without `--`, e.g. `pnpm run setup --no-ollama --with-piper`.
+
+### Manual setup
+
+```bash
+# 1. Toolchain
+brew install node@22 ffmpeg python@3.12       # Node 20.11+ also works, e.g. via nvm
+npm install -g pnpm@11                         # or: corepack enable pnpm / brew install pnpm
+brew install tesseract ollama                  # optional: OCR and local LLM
+
+# 2. Configuration
+cp .env.example .env                           # all values have working defaults
+ln -s ../../.env apps/api/.env                 # Prisma CLI reads apps/api/.env
+
+# 3. Node dependencies + infrastructure
+pnpm install
+pnpm infra:up                                  # docker compose up -d postgres redis
+pnpm db:generate                               # prisma generate
+pnpm --filter @app/api prisma:deploy           # apply migrations (prisma migrate deploy)
+
+# 4. Python worker + models
+pnpm setup:python                              # workers/processing/.venv (add --piper for Piper)
+pnpm setup:models                              # Kokoro v1.0 → storage/models/kokoro/
+
+# 5. Build + check
+pnpm build:packages && pnpm --filter @app/cli build
+pnpm doctor
+```
+
+**Apple Silicon checklist.** Everything should be native arm64. `uname -m` should print `arm64`,
+Homebrew should live in `/opt/homebrew`, and
+`workers/processing/.venv/bin/python -c 'import platform; print(platform.machine())'` should print
+`arm64`. An x86_64 Python runs under Rosetta and makes TTS several times slower; `setup-python.sh`
+warns about this.
+
+`pnpm doctor` output on a working machine:
+
+```text
+  ✓ Python worker                      Python 3.12.14, PyMuPDF 1.28.2
+  ✓ TTS engine (kokoro)                ready
+  ! TTS engine (piper)                 piper-tts is not installed. Run: workers/processing/.venv/bin/pip install piper-tts
+  ✓ TTS engine (say)                   ready
+  ✓ OCR (Tesseract)                    available for scanned PDFs
+  ✓ FFmpeg                             ffmpeg version 9.0.1
+  ✓ VideoToolbox (hardware H.264)      available — fast, low-CPU encoding
+  ✓ Local LLM (Ollama qwen3:4b)        ready
+  ✓ Disk space                         38.3 GB free
+
+All required checks passed.
+```
+
+`✗` marks a required check that failed and `!` an optional one. Each failure prints the exact fix
+command.
+
+### Ollama (local LLM)
+
+The LLM is **optional**. Without it the pipeline runs rule-based only and adds a warning to the project.
+
+```bash
+brew install ollama
+brew services start ollama           # or run `ollama serve` in a terminal
+ollama pull qwen3:4b                 # or: pnpm setup:models ollama   (uses $OLLAMA_MODEL)
+```
+
+The pipeline calls Ollama's `/api/chat` with a JSON schema (`format`), `temperature: 0`,
+`think: false` and `keep_alive: "10m"`. It uses the model for three things only:
+
+1. picking chapter headings from a short list of candidate lines, only when the deterministic
+   detection is ambiguous or found fewer than two chapters;
+2. repairing sentences in paragraphs that *look* damaged (letter-spaced text, glued words, broken
+   ligatures), at most 300 paragraphs. A repair is rejected if it is less than 80 % similar to the
+   original;
+3. optionally (`LLM_PRONUNCIATION=true`), respellings for names a TTS voice would likely mispronounce.
+
+Every answer is cached on disk by model and prompt hash (`storage/extracted/llm-cache/`). Any other
+Ollama model with structured-output support works: set `OLLAMA_MODEL`, then `ollama pull` it.
+
+### TTS engines
+
+| Engine | Install | Voices | Notes |
+|---|---|---|---|
+| `kokoro` (default) | `pnpm setup:python` + `pnpm setup:models` | 54 voices, 28 English: `af_*`/`am_*` American, `bf_*`/`bm_*` British (`af_heart`, `am_michael`, `bf_emma`, …) | Kokoro-82M v1.0 via `kokoro-onnx` and onnxruntime on CPU. About 5× realtime per process on an M4. |
+| `piper` (optional) | `pnpm setup:python --piper` + `pnpm setup:models piper` | Every `<voice>.onnx` + `.onnx.json` in `PIPER_MODEL_DIR`; the id is the file stem (`en_US-lessac-medium`) | Very fast and lightweight. Add more voices from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) by dropping both files into `storage/models/piper/`. |
+| `say` (fallback) | nothing, it is built into macOS | System voices (`say -v '?'`), e.g. `Samantha` | Zero-install fallback. Better voices can be downloaded in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices. |
+
+Choose the default with `TTS_ENGINE` and `TTS_DEFAULT_VOICE`, or per project in the UI, the API
+(`settings.tts`) or the CLI (`--engine`, `--voice`). List installed voices with
+`node apps/cli/dist/main.js voices --engine kokoro` or `GET /system/voices?engine=kokoro`.
+
+### FFmpeg
+
+```bash
+brew install ffmpeg
+ffmpeg -hide_banner -encoders | grep -E 'h264_videotoolbox|aac_at'
+```
+
+With `VIDEO_ENCODER=auto` the worker uses `h264_videotoolbox` (the hardware media engine,
+bitrate-controlled by `VIDEO_BITRATE`) and falls back to `libx264 -preset veryfast -tune stillimage
+-crf $VIDEO_CRF`. With `AUDIO_ENCODER=auto` the audio master uses Apple's `aac_at` if available,
+otherwise FFmpeg's `aac`. Output is BT.709, yuv420p, High profile, `+faststart`.
+
+### PostgreSQL and Redis
+
+`docker compose up -d postgres redis` (`pnpm infra:up`) starts:
+
+| Service | Image | Host port | Details |
+|---|---|---|---|
+| postgres | `postgres:17-alpine` | **5433** → 5432 | user/password/db `audiobook`; volume `pgdata`; `pgcrypto` enabled by `docker/postgres/init.sql`; 512 MB memory limit |
+| redis | `redis:7-alpine` | 6379 | AOF persistence, `maxmemory 256mb`, `maxmemory-policy noeviction` (BullMQ requires it); volume `redisdata` |
+
+To use your own servers instead, point `DATABASE_URL` or `REDIS_URL` at them. Redis must use
+`maxmemory-policy noeviction`. Then run `pnpm --filter @app/api prisma:deploy`. `pnpm infra:down`
+stops the containers and keeps the volumes.
+
+---
+
+## Configuration (environment variables)
+
+Everything is read from the root `.env` (copy it from `.env.example`) by `packages/config`, and
+values set in the process environment take precedence. Relative paths resolve from the repository
+root. Invalid values (for example `TTS_ENGINE=foo`) stop the app at startup with `Invalid
+configuration: …`. Booleans accept `1`, `true`, `yes` and `on`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| **Storage & infrastructure** | | |
+| `STORAGE_DIR` | `./storage` | Root for uploads, caches, renders, outputs and models (see [Storage layout](#storage-layout)) |
+| `DATABASE_URL` | `postgresql://audiobook:audiobook@localhost:5433/audiobook?schema=public` | PostgreSQL for the API/worker (Prisma). Not used by the CLI. |
+| `REDIS_URL` | `redis://localhost:6379` | Redis for the BullMQ job queue. Not used by the CLI. |
+| `API_PORT` | `4000` | API port. The API binds to `127.0.0.1` only; CORS allows `http://localhost:*` and `http://127.0.0.1:*`. |
+| `MAX_UPLOAD_MB` | `500` | Maximum PDF upload size. Uploads are streamed to disk, not buffered. |
+| `PYTHON_BIN` | `./workers/processing/.venv/bin/python` | Interpreter for the Python worker processes |
+| **Local LLM** | | |
+| `LLM_ENABLED` | `true` | Master switch for Ollama (a project can also turn it off with `text.useLlm=false` or `--no-llm`) |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server |
+| `OLLAMA_MODEL` | `qwen3:4b` | Model name. It is part of the analysis cache key, so changing it re-runs chapter/text analysis. |
+| `LLM_TIMEOUT_MS` | `120000` | Timeout per LLM request |
+| `LLM_PRONUNCIATION` | `false` | Opt-in: ask the LLM for respellings of up to 150 capitalized or non-ASCII words that occur at least twice (English only). The respellings are applied to narration, never to displayed text. |
+| **TTS** | | |
+| `TTS_ENGINE` | `kokoro` | Default engine: `kokoro`, `piper` or `say` |
+| `TTS_DEFAULT_VOICE` | `af_heart` | Default voice for `TTS_ENGINE` |
+| `KOKORO_MODEL_PATH` | `./storage/models/kokoro/kokoro-v1.0.onnx` | Kokoro ONNX model |
+| `KOKORO_VOICES_PATH` | `./storage/models/kokoro/voices-v1.0.bin` | Kokoro voice pack |
+| `KOKORO_PROVIDER` | `cpu` | onnxruntime execution provider: `cpu` or `coreml`. `coreml` measured slower on the M4. |
+| `PIPER_MODEL_DIR` | `./storage/models/piper` | Folder of Piper voices (`*.onnx` + `*.onnx.json`) |
+| `TTS_SAMPLE_RATE` | `24000` | Sample rate of the chapter FLACs (Kokoro's native rate). The final `.m4a` is resampled to 48 kHz mono. |
+| **Video & audio encoding** | | |
+| `VIDEO_ENCODER` | `auto` | `auto` (VideoToolbox, else libx264), `h264_videotoolbox` or `libx264` |
+| `VIDEO_BITRATE` | `6M` | VideoToolbox target/max bitrate. Also sizes the disk-space pre-check before rendering. |
+| `VIDEO_CRF` | `20` | Quality when encoding with libx264 |
+| `VIDEO_FPS` | `30` | Default `--fps` for the **CLI**. API/UI projects use the project setting `video.fps` (default 30). |
+| `AUDIO_ENCODER` | `auto` | `auto` (`aac_at` if available, else `aac`) or any FFmpeg AAC encoder name |
+| `AUDIO_BITRATE` | `192k` | AAC bitrate of `audiobook.m4a` (copied unchanged into the MP4) |
+| `FFMPEG_BIN` / `FFPROBE_BIN` | `ffmpeg` / `ffprobe` | FFmpeg binaries |
+| **Resource limits (16 GB defaults)** | | |
+| `MAX_CONCURRENT_TTS` | `2` | Chapters narrated in parallel (one Python process each, each with its own model copy) |
+| `MAX_CONCURRENT_PDF_RENDER` | `2` | Chapters rendered to video in parallel (one compositor process + one FFmpeg encoder each) |
+| `MAX_CONCURRENT_LLM` | `1` | Concurrent Ollama requests |
+| `MAX_CONCURRENT_PROJECTS` | `1` | Projects the worker processes at the same time (BullMQ concurrency) |
+| `DISK_RESERVE_GB` | `3` | Free space always kept in reserve. Extraction, TTS and rendering check free space before they start. |
+| `KEEP_INTERMEDIATE` | `false` | `false`: after a successful video run, delete the chapter video segments and page rasters. Chapter audio and text caches are always kept. |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` for the API and worker (the CLI logs warnings unless `--verbose`) |
+| **Web UI** | | |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:4000` | API base URL used by the browser. It is read by `apps/web`, so put it in `apps/web/.env.local` (template: `apps/web/.env.example`) or export it; Next.js does not read the root `.env`. |
+| `WEB_PORT` | `3000` | Informational. `apps/web` currently starts with `next dev -p 3000`. |
+
+Set automatically, not in `.env`: the pipeline starts each TTS process with
+`KOKORO_THREADS = OMP_NUM_THREADS = floor(logical CPUs / MAX_CONCURRENT_TTS)` (5 on a 10-core M4 with
+the default of 2), and each render process with `OMP_NUM_THREADS = OPENCV_NUM_THREADS = 2`. Values
+you set yourself are overridden for those processes.
+
+---
+
+## Development commands
+
+| Command | What it does |
+|---|---|
+| `pnpm dev` | Builds the packages, then runs `tsc -w` for the pipeline, the API (`:4000`), the worker and the web UI (`:3000`) together |
+| `pnpm dev:api` | API only (rebuilds on change, restarts via `node --watch-path=dist`). Needs `pnpm build:packages` first. |
+| `pnpm dev:worker` | Processing worker only. Without it, jobs stay at "Waiting for the worker…". |
+| `pnpm dev:web` | Next.js dev server |
+| `pnpm build:packages` | `tsc -b` for `packages/{types,config,shared,pipeline}` |
+| `pnpm build` | Packages + API + CLI + web |
+| `pnpm typecheck` | Type-check every workspace package |
+| `pnpm test` | `test:ts` then `test:py` |
+| `pnpm test:ts` | vitest for `packages/*/test` and `apps/api/test` |
+| `pnpm test:py` | pytest in `workers/processing` |
+| `pnpm doctor` | Dependency check with fix commands (needs the CLI built once: `pnpm --filter @app/cli build`) |
+| `pnpm infra:up` / `pnpm infra:down` | Start / stop Postgres + Redis in Docker |
+| `pnpm db:migrate` | `prisma migrate dev` (development: creates and applies migrations) |
+| `pnpm --filter @app/api prisma:deploy` | `prisma migrate deploy` (apply existing migrations only) |
+| `pnpm db:generate` | `prisma generate` |
+| `pnpm run setup` | One-shot macOS setup (`scripts/setup-mac.sh`) |
+| `pnpm setup:python` | Python venv + requirements (`scripts/setup-python.sh [--piper] [--check] [--recreate]`) |
+| `pnpm setup:models` | Model downloads (`scripts/download-models.sh [piper] [ollama] [all]`) |
+| `pnpm audiobook <pdf> [flags]` | Build the CLI and run `create` (alias: `pnpm audiobook:create`) |
+| `pnpm --filter @app/api start` / `start:worker` | Run the built API / worker without watch mode |
+| `pnpm clean` | Remove build output (`dist/`, `.next/`, tsbuildinfo) |
+
+---
+
+## CLI
+
+The CLI runs the whole pipeline without the web UI, the database or Redis. It is useful for
+debugging, batch jobs and automation.
+
+```bash
+pnpm audiobook ./book.pdf                                   # default: 1080p read-along video + audio + SRT
+pnpm audiobook ./book.pdf --voice am_michael --chapters 1-2 --out ./output
+pnpm audiobook ./book.pdf --mode audio                      # audiobook only (skips video)
+pnpm audiobook ./book.pdf --animation static --fps 24       # fastest video
+pnpm audiobook ./book.pdf --engine say --voice Samantha --no-llm
+pnpm audiobook ./scan.pdf --ocr force                       # OCR every page (needs tesseract)
+npm run audiobook:create -- ./book.pdf                      # npm needs the `--`
+
+node apps/cli/dist/main.js inspect ./book.pdf               # page count, word estimate, scan detection (JSON)
+node apps/cli/dist/main.js voices --engine kokoro           # installed voices
+node apps/cli/dist/main.js doctor                           # dependency check
+node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no-toc]
+```
+
+> With **pnpm, do not put `--` before the arguments.** pnpm 11 forwards it literally, and the CLI then
+> treats every later flag as a file name, which silently drops your options. Relative paths resolve
+> from the directory you run the command in.
+
+| `create` flag | Values (default) | Meaning |
+|---|---|---|
+| `--out <dir>` | `./output` | Where the final files are written (hard-linked from storage, copied if that fails) |
+| `--mode` | `video` \| `audio` (`video`) | Audiobook + animated PDF, or audiobook only |
+| `--engine` | `kokoro` \| `piper` \| `say` (`$TTS_ENGINE`) | TTS engine |
+| `--voice <id>` | `$TTS_DEFAULT_VOICE`, or the engine's default voice | e.g. `af_heart`, `am_michael`, `bf_emma`, `en_US-lessac-medium`, `Samantha` |
+| `--speed <n>` | 0.5–2.0 (`1`) | Speaking rate |
+| `--aspect` | `16:9` \| `9:16` \| `1:1` (`16:9`) | 1920×1080, 1080×1920 or 1080×1080 |
+| `--fps <n>` | `$VIDEO_FPS` (30) | Frame rate |
+| `--animation` | `follow` \| `kenburns` \| `static` (`follow`) | Camera style (see [video styles](#add-a-video-style)) |
+| `--highlight` | `sentence` \| `paragraph` (`sentence`) | Highlight granularity |
+| `--highlight-style` | `marker` \| `underline` \| `box` (`marker`) | Highlight look |
+| `--theme` | `paper` \| `light` \| `dark` (`paper`) | Background and title-card colors |
+| `--chapters <a-b>` | e.g. `3` or `1-4` | Narrate only these chapters (1-based, as numbered after detection, including "Opening Pages") |
+| `--skip-front-matter` | off | Drop content before the first chapter and front-matter chapters (copyright, contents, …) |
+| `--no-llm` | off | Don't use Ollama for this run |
+| `--ocr` | `auto` \| `off` \| `force` (`auto`) | `auto` OCRs pages with no text layer but with images |
+| `--password <pw>` | | Password for an encrypted PDF (CLI only, see [troubleshooting](#password-protected-pdf)) |
+| `--force` | off | Ignore every cache and recompute everything |
+| `--verbose` | off | Developer logs and technical error details |
+
+How CLI runs are stored: the project id is `cli-<first 16 hex chars of the PDF's SHA-256>`, and its
+state lives in `storage/output/cli-…/state.json`. Running the same PDF again **resumes**, reusing
+every cached stage. Only settings that changed cause recomputation. Ctrl-C stops cleanly; run the
+same command again to continue. `timeline.json` stays in `storage/output/cli-…/`.
+
+Example run:
+
+```text
+📖  book.pdf  (1.2 MB)
+    voice kokoro/af_heart · 1920x1080@30 follow
+
+  ✓ PDF Analysis           212 pages, 71,480 words
+  ✓ Text Cleaning          2 running headers/footers, 198 page numbers removed
+  ✓ Chapter Detection      14 chapters (toc), 4,902 sentences
+  ✓ tts chapter 1          (cached)
+  ███████████░░░░░░░░░░░░░  47.3%  GENERATING_AUDIO · chapter 6/14  Narrating Chapter 6 … sentence 212/390
+```
+
+---
+
+## HTTP API
+
+Base URL `http://localhost:4000`. Heavy work never runs inside a request: `POST /process` only
+enqueues a job.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
+| `POST /projects` | multipart: `file` (PDF), `settings` (JSON string of partial `ProjectSettings`), `name` | `ProjectDetail`. Checks the PDF header, deduplicates by SHA-256 and inspects pages, words and scan status. Does not start processing. |
+| `GET /projects` | | `ProjectSummary[]` (newest first, up to 200) |
+| `GET /projects/:id` | | `ProjectDetail`: settings, document, snapshot, steps, outputs, chapters |
+| `PATCH /projects/:id/settings` | partial `ProjectSettings` JSON (`text.chapterRange: null` clears the range) | `ProjectDetail`. `409` while processing. |
+| `POST /projects/:id/process` | | `{ jobId }`: start or resume |
+| `POST /projects/:id/retry` | | `{ jobId }`: same as resume, since finished steps are cached |
+| `POST /projects/:id/restart` | | `{ jobId }`: ignore caches and redo everything |
+| `POST /projects/:id/cancel` | | `{ ok: true }`. The worker stops within ~1.5 s; finished chapters are kept. |
+| `GET /projects/:id/status` | | `ProgressSnapshot` `{status, progress, stage, message, currentChapter, totalChapters, warnings, error}` |
+| `GET /projects/:id/steps` | | `StepRecord[]` (`EXTRACT`, `CLEAN`, `ANALYZE`, `TTS_CHAPTER_n`, `AUDIO_MERGE`, `TIMELINE`, `VIDEO_CHAPTER_n`, `MUX`) |
+| `GET /projects/:id/output` | | `OutputFile[]` `{name, kind, size, url}` |
+| `GET /projects/:id/output/:name` | `?inline=1` to stream inline (for `<audio>`/`<video>`) | File download with HTTP Range support |
+| `GET /projects/:id/timeline` | | `Timeline` JSON (`409 NOT_READY` until audio is done) |
+| `GET /projects/:id/pages/:page/image` | | JPEG render of a PDF page (1.6 px/pt, cached) |
+| `DELETE /projects/:id/cache` | | `{ freedBytes }`: clean the project cache (never deletes final outputs) |
+| `DELETE /projects/:id` | `?deleteOutputs=true` (default `false`) | Delete the project. Outputs are kept unless requested. The upload is removed only if no other project uses the same PDF. |
+| `GET /system/health` | `?fresh=1` bypasses the 15 s cache | `HealthReport` `{ok, checks[{name, ok, required, message, fix?}]}`, including DB and Redis |
+| `GET /system/voices` | `?engine=kokoro\|piper\|say` | `{engine, available, message, voices: VoiceInfo[]}` |
+| `GET /system/config` | | `{defaults: ProjectSettings, engines, defaultVoices, llm: {enabled, model}, maxUploadMb}` |
+
+Timeline JSON (used by the UI preview): `{duration, fps, pageSizes: {"<page>": [w, h]}, chapters[],
+segments[{i, sentenceId, page, start, end, text, rects: [[x0, y0, x1, y1], …], pageChange}]}`. Times
+are global seconds, and rects are in PDF points with the origin at the top left.
+
+Errors always have this shape, with a user-friendly `message` and technical details only in the
+server log:
+
+```json
+{ "error": { "code": "TTS_FAILED", "message": "Audio generation failed for Chapter 7.",
+             "hint": "Retry to continue from Chapter 7 — finished chapters are kept.",
+             "retryable": true, "stepKey": "TTS_CHAPTER_7", "chapterIndex": 6 } }
+```
+
+Status codes: `400` bad input, `404` not found, `409` conflict or not ready, `410` uploaded PDF
+missing, `422` unreadable/encrypted/empty/scanned PDF, `503` database, Redis or Python unavailable,
+`507` not enough disk space, `500` other.
+
+```bash
+# A complete session with curl
+ID=$(curl -s -F file=@book.pdf -F name="My Book" \
+       -F 'settings={"tts":{"voice":"am_michael"},"video":{"theme":"dark"},"text":{"chapterRange":{"from":1,"to":2}}}' \
+       http://localhost:4000/projects | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+curl -s -X POST http://localhost:4000/projects/$ID/process
+curl -s http://localhost:4000/projects/$ID/status
+curl -s -o audiobook.mp4 http://localhost:4000/projects/$ID/output/audiobook.mp4
+```
+
+---
+
+## Processing pipeline
+
+### Stages and statuses
+
+| # | Stage | Status shown | Persisted step(s) | What happens |
+|---|---|---|---|---|
+| 1 | `EXTRACT` | `EXTRACTING` | `EXTRACT` | PyMuPDF streams every page into `pages.jsonl` (words + boxes + font info). OCR runs for image-only pages if Tesseract is available. |
+| 2 | `CLEAN` | `CLEANING` | `CLEAN` | Removes headers/footers, page numbers, TOC leaders and duplicates |
+| 3 | `ANALYZE` | `ANALYZING` | `ANALYZE` | Paragraphs, de-hyphenation, chapters, sentences, highlight regions, narration text; the LLM when needed |
+| 4 | `TTS` | `GENERATING_AUDIO` | `TTS_CHAPTER_1…n` | One FLAC per chapter with exact sentence timings (parallel up to `MAX_CONCURRENT_TTS`) |
+| 5 | `AUDIO_MERGE` | `GENERATING_AUDIO` | `AUDIO_MERGE` | Concatenate, `loudnorm` to −16 LUFS (optional), 48 kHz mono AAC with chapter markers → `audiobook.m4a` |
+| 6 | `TIMELINE` | `PREPARING_VIDEO` | `TIMELINE` | Global timeline, cross-page splits → `timeline.json`, `subtitles.srt`, `chapters.txt` |
+| 7 | `VIDEO` | `RENDERING` | `VIDEO_CHAPTER_1…n` | Rasterize pages at the needed scale, composite frames, VideoToolbox → one video-only MP4 per chapter |
+| 8 | `MUX` | `RENDERING` | `MUX` | Stream-copy concat + AAC + soft `mov_text` subtitles + chapters → `audiobook.mp4`, then an A/V sync check |
+
+Other project statuses: `PENDING` (queued), `COMPLETED`, `FAILED` (with a user-facing `error`) and
+`CANCELLED`. Step statuses: `PENDING`, `RUNNING`, `COMPLETED` (with `cached: true` when reused),
+`FAILED` and `SKIPPED`. "Audiobook only" mode skips `VIDEO` and `MUX`. The overall percentage is
+weighted by typical cost: TTS 55 %, video 28 %, the rest small.
+
+### Resume, retry, restart, cancel
+
+- **Resume** and **Retry** are the same operation. The run starts again from the top, every step
+  looks up its content-addressed artifact, and whatever exists is marked `cached` in milliseconds.
+  If processing stopped during chapter 7, chapters 1–6 are not narrated again.
+- **Restart** (`POST /restart`, CLI `--force`) ignores all caches and recomputes and overwrites
+  every artifact.
+- **Cancel**: the worker polls the cancel flag every 1.5 s and kills the running Python and FFmpeg
+  processes. The chapter in progress returns to `PENDING` and is redone on resume.
+- **Crash or reboot**: when the worker starts, it marks projects that were left "running" as
+  `FAILED` with `INTERRUPTED` ("Processing was interrupted before it finished. Click Resume…").
+  Nothing is lost except the chapter that was in progress.
+- Artifacts are written atomically (temp file + rename), so a half-written file is never mistaken
+  for a finished one.
+
+### Caching rules (what invalidates what)
+
+Each stage's cache key is a hash of exactly the inputs that affect its output:
+
+| You change… | What is recomputed |
+|---|---|
+| Video **theme**, highlight style/colour, animation, subtle zoom, resolution/aspect, progress bar, chapter titles | `VIDEO_CHAPTER_n` + `MUX` only |
+| **fps** or **highlight mode** (sentence ↔ paragraph) | `TIMELINE` + video + mux |
+| **Voice**, engine, speed or pause lengths | `TTS_CHAPTER_n` (all chapters) + audio master + timeline + video + mux. **Extraction and LLM/analysis are reused.** |
+| Loudness normalization, `AUDIO_BITRATE`, `AUDIO_ENCODER` | `AUDIO_MERGE` + `MUX`. Video segments are reused only if they are still on disk (`KEEP_INTERMEDIATE=true`); otherwise they are re-rendered. |
+| Embedded subtitles on/off | `MUX` (plus video re-render if the segments were cleaned up) |
+| LLM on/off, `OLLAMA_MODEL`, skip front matter, `LLM_PRONUNCIATION` | `CLEAN` + `ANALYZE`. TTS is redone only for chapters whose sentences or narration actually changed. |
+| Chapter range | Already-narrated chapters are reused; audio master, timeline and video are rebuilt because chapter start times shift |
+| OCR mode or language | `EXTRACT` and everything after it |
+| Nothing (a new project from the same PDF) | Extraction, analysis and chapter audio are shared through the content-addressed cache |
+
+Extraction depends only on the PDF bytes, OCR mode and language. Theme and voice changes never
+touch it. The key formulas are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#cache-keys).
+
+---
+
+## Storage layout
+
+```text
+storage/                                      (STORAGE_DIR)
+├── uploads/
+│   ├── <sha256>.pdf                          uploaded PDFs, deduplicated by content
+│   └── .incoming/                            uploads in flight (streamed from multer)
+├── extracted/
+│   ├── <sha256>/extract-<key>/pages.jsonl    one JSON line per page: blocks → lines → words + boxes
+│   ├── <sha256>/extract-<key>/meta.json      page count, sizes, outline (TOC), empty/OCR pages
+│   ├── <sha256>/analysis-<key>.json          chapters → paragraphs → sentences → highlight regions
+│   └── llm-cache/<task>-<hash>.json          every LLM answer (task, model and prompt hash)
+├── audio/
+│   ├── <key>.flac                            one narrated chapter (shared by all projects)
+│   └── <key>.json                            its sample count + per-sentence timings
+├── renders/
+│   ├── pages/<sha256>/<scale>/page-NNNN.png  page rasters for video (removed after success*)
+│   ├── preview/<sha256>/page-NNNN.jpg        UI page previews (1.6 px/pt)
+│   └── video/<key>.mp4                       per-chapter video-only segments (removed after success*)
+├── output/<projectId>/                       FINAL OUTPUTS (never removed by "clean cache")
+│   ├── audiobook.mp4  audiobook.m4a  subtitles.srt  chapters.txt  timeline.json
+│   ├── manifest.json                         which cache keys this project's outputs were built from
+│   ├── state.json                            CLI projects only (steps + progress)
+│   └── .work/                                concat lists / metadata during a run
+└── models/
+    ├── kokoro/kokoro-v1.0.onnx, voices-v1.0.bin
+    └── piper/<voice>.onnx, <voice>.onnx.json
+
+* unless KEEP_INTERMEDIATE=true
+```
+
+**Clean project cache** (`DELETE /projects/:id/cache`) removes the PDF's extraction and analysis,
+page rasters and previews, the chapter audio and video segments listed in the project's manifest, and
+`.work/`. It never removes the final outputs. Caches are shared by content, so another project built
+from the same PDF will recompute what was removed. **Delete project** keeps the outputs unless
+`deleteOutputs=true`.
+
+---
+
+## Troubleshooting
+
+Start with `pnpm doctor` (or `GET /system/health?fresh=1`). Every failed check prints its fix.
+
+#### "The background job service (Redis) is not running."
+Run `pnpm infra:up` (or `docker compose up -d redis`) and check with `docker compose ps`. If port 6379
+is already taken, for example by a Homebrew Redis (`brew services list`), either stop that Redis or
+use it: set `REDIS_URL` and make sure it uses `maxmemory-policy noeviction`.
+
+#### "The database (PostgreSQL) is not running."
+Run `pnpm infra:up`, then `pnpm --filter @app/api prisma:deploy` on the first start. If Docker itself
+isn't running, start Docker Desktop or OrbStack (`open -a Docker`).
+
+#### Port 5432 / 5433 clash
+The container is published on **5433** on purpose, so a Postgres.app or Homebrew Postgres on 5432
+does not conflict. If 5433 is also taken (`lsof -nP -iTCP:5433 -sTCP:LISTEN`), change the host port in
+`docker-compose.yml` (`"5434:5432"`) and in `DATABASE_URL`.
+
+#### "Local AI (Ollama) not used: …" / Ollama unreachable / model missing
+This is a warning, not an error: processing continues rule-based. To enable the LLM, start Ollama
+(`brew services start ollama` or `ollama serve`) and pull the model (`ollama pull qwen3:4b`, or
+`pnpm setup:models ollama`). To silence the warning, set `LLM_ENABLED=false`.
+
+#### "The "kokoro" voice engine is not ready." / "Kokoro model files are missing"
+Run `pnpm setup:models`. It checks the files in `storage/models/kokoro/`, resumes partial downloads
+and skips files that are already complete. If `kokoro-onnx` is missing, run `pnpm setup:python`.
+
+#### "The voice "…" is not installed"
+Voice ids are engine-specific. List them with `node apps/cli/dist/main.js voices --engine <engine>`.
+
+#### Scanned PDF ("This PDF is a scan (images only)…")
+Install Tesseract (`brew install tesseract`) and keep OCR at `auto` (or use `force`). For Bangla OCR,
+also run `brew install tesseract-lang`. OCR runs at 200 dpi and is slow compared to text extraction.
+The API refuses an obviously scanned PDF if `text.ocr` is `off`.
+
+#### Password-protected PDF
+The API rejects encrypted PDFs (`PDF_PASSWORD`, "Remove the password and upload it again"). Either
+use the CLI with `--password <pw>`, or remove the password from a PDF you own, for example with qpdf:
+`brew install qpdf && qpdf --decrypt --password='…' locked.pdf unlocked.pdf`. DRM circumvention is
+not supported.
+
+#### Not enough disk space
+Extraction, TTS and rendering each check free space before they start (`DISK_SPACE` error) and keep
+`DISK_RESERVE_GB` free. The video check is conservative: it reserves about
+`2.2 × duration × VIDEO_BITRATE / 8 + 400 MB`, which is about 60 GB for a 10-hour book at `6M`. Real
+page video usually encodes well below the bitrate cap: the 640×360 sample came out at about
+0.33 Mbit/s. To free space, use **Clean project cache** on finished projects, delete old projects, or
+lower `VIDEO_BITRATE` (e.g. `4M`). Then resume; nothing already finished is lost.
+
+#### VideoToolbox not available
+The doctor shows `! VideoToolbox (hardware H.264) not available, will use libx264 (slower)`. Use
+Homebrew's FFmpeg on a native arm64 shell (`ffmpeg -hide_banner -encoders | grep videotoolbox`) and
+keep `VIDEO_ENCODER=auto`. Setting `VIDEO_ENCODER=h264_videotoolbox` explicitly makes a missing encoder
+a clear error instead of a silent fallback.
+
+#### Processing was interrupted (crash, reboot, closed terminal)
+In the UI, click **Resume** (`POST /projects/:id/process`). With the CLI, run the same command again.
+Finished chapters are reused, and only the chapter in progress is redone.
+
+#### "The Python processing worker could not be started."
+Run `pnpm setup:python`. If Homebrew upgraded Python and broke the venv, run
+`pnpm setup:python --recreate`. `PYTHON_BIN` must point to the venv's interpreter.
+
+#### "The computer ran out of memory." / the Mac swaps heavily
+Lower `MAX_CONCURRENT_TTS` and/or `MAX_CONCURRENT_PDF_RENDER` to `1`, keep
+`MAX_CONCURRENT_PROJECTS=1`, and close other large apps (browsers with many tabs, other LLMs).
+
+#### "The final video failed the audio/video sync check."
+This should not happen. Resume once; if it repeats, run with `--verbose` or `LOG_LEVEL=debug` and
+open an issue with the log. Restart the project to rebuild every artifact.
+
+---
+
+## Performance tuning for a 16 GB Mac
+
+**Measured on the development machine (M4, 16 GB, macOS 15):**
+
+| Workload | Measured speed |
+|---|---|
+| Kokoro-82M ONNX TTS, onnxruntime **CPU** provider | RTF ≈ **0.21** (≈ 5× realtime) per process |
+| Kokoro-82M ONNX TTS, **CoreML** provider | RTF ≈ 0.23, slower, so `cpu` is the default |
+| Video, 1920×1080 @ 30 fps, `follow` animation, VideoToolbox | ≈ **90–110 frames/s** per render worker (≈ 3× realtime) |
+| Video, 640×360 @ 15 fps | ≈ 600 frames/s |
+
+**Estimates for a ~280-page book (~10 h of narration).** These are derived from the numbers above,
+not measured end-to-end:
+
+| Stage | 1 process | 2 processes (default) |
+|---|---|---|
+| TTS: 10 h × 0.21 | ≈ 2 h | ≈ 1.2–1.5 h (both processes share the same cores, so less than 2× faster) |
+| Video: 10 h × 30 fps = 1.08 M frames ÷ ~100 fps | ≈ 3 h | ≈ 1.5–2 h |
+| Extraction, analysis, audio mastering, mux | minutes | minutes |
+| **Total with defaults** | | **≈ 3–4 h** |
+
+Knobs, from most to least effect:
+
+- **`animation=static`** is the fastest style. There is no camera motion or zoom, so consecutive
+  frames are identical between highlight changes and the compositor reuses them instead of
+  recompositing. `follow` (default) and `kenburns` compose every frame.
+- **fps 24 instead of 30** gives 20 % fewer frames and about 20 % less render time. Use `--fps 24`
+  in the CLI or `video.fps` in the UI/API; `VIDEO_FPS` only sets the CLI default.
+- **Resolution.** Render cost scales with pixel count. Set `video.width`/`video.height` via the
+  UI/API, for example 1280×720.
+- **`MAX_CONCURRENT_TTS`** (default 2). Each process loads its own Kokoro model (the fp32 ONNX file
+  is 325 MB). 1 uses the least memory; 3 or more rarely helps on a 10-core M4, because the cores are
+  split between processes.
+- **`KOKORO_THREADS`** is not a setting. The runner sets it per TTS process to
+  `floor(logical CPUs / MAX_CONCURRENT_TTS)`, so each process gets its share of the cores: 5 each on
+  a 10-core M4 with 2 processes. Keep `KOKORO_PROVIDER=cpu`.
+- **`MAX_CONCURRENT_PDF_RENDER`** (default 2). Each worker is a compositor process holding at most 3
+  page canvases, plus an FFmpeg encoder. Use 1 if the Mac gets hot or memory is tight.
+- **Audio only** (`--mode audio` / `outputMode: "audiobook_only"`) skips video entirely.
+- **`--chapters 1-2`** for trial runs. Later full runs reuse those chapters.
+- **`KEEP_INTERMEDIATE=true`** keeps chapter video segments and page rasters, so re-muxing or
+  switching back to an earlier look is instant. It costs disk space. The default `false` frees it
+  after success.
+- **Ollama** keeps its model loaded for 10 minutes after the last request (`keep_alive`). That overlaps
+  the start of TTS. `ollama ps` shows loaded models, and `ollama stop <model>` frees the memory
+  immediately. Keep `MAX_CONCURRENT_LLM=1`.
+- **`MAX_CONCURRENT_PROJECTS=1`**. Run books one after another. Two books at once compete for the
+  same cores and memory.
+
+Memory design: pages are extracted one at a time to JSON lines; audio is synthesized sentence by
+sentence and streamed to FLAC; frames are streamed to FFmpeg; page rasters are capped at 12 MP; Python
+pools are shut down between stages.
+
+---
+
+## Extending
+
+### Add another TTS model
+
+1. **Python engine:** create `workers/processing/audiobook_worker/tts/<name>_engine.py` with a
+   subclass of `TTSEngine` (`tts/base.py`):
+   - `available()` (classmethod) returns `(ok, message)`. The message must say exactly how to install
+     the engine; it is shown in the doctor and in the UI.
+   - `voices()` returns a list of `Voice(id, name, language, gender)`.
+   - `synthesize(text, voice, speed, language)` returns mono float32 samples and their sample rate.
+     Resampling, silence trimming, retries, pauses, FLAC writing and sentence timings are handled
+     by `tts/service.py`. Load models in `__init__`, which runs once per process.
+2. Register it in `workers/processing/audiobook_worker/tts/registry.py` (`ENGINES`).
+3. **TypeScript:** add the name to `TTSEngineName` (`packages/types/src/settings.ts`), the `TTS_ENGINE`
+   enum (`packages/config/src/index.ts`), the `tts.engine` enum in
+   `apps/api/src/projects/settings.schema.ts` and the engine union in
+   `packages/pipeline/src/tts/python-provider.ts`. Register a factory in
+   `packages/pipeline/src/tts/registry.ts`, and add a default voice to `DEFAULT_VOICES`.
+4. Model files: add a download step to `scripts/download-models.sh`. If the engine needs a path
+   setting, add it to `packages/config` and pass it to Python in `packages/pipeline/src/python/bridge.ts`
+   (see `PIPER_MODEL_DIR`).
+5. The UI picks engines and voices from `GET /system/config` and `GET /system/voices`. If you change
+   an engine's output for the same input, bump the provider's `version`, which is part of the TTS
+   cache key.
+
+For an engine that is not in Python (for example a local HTTP TTS server), implement the
+`TTSProvider` interface (`packages/pipeline/src/tts/types.ts`) in TypeScript and call
+`registerTTSEngine(name, factory)`. `synthesizeSegments()` must return **sample-exact sentence
+timings**, because the highlight sync depends on them.
+
+### Add another LLM
+
+- **Different Ollama model:** set `OLLAMA_MODEL` (e.g. `qwen3:8b`, `gemma3:4b`, `llama3.2:3b`), run
+  `ollama pull` for it, and that's it. The model name is part of the analysis cache key, so only
+  analysis re-runs. Extraction is reused, and TTS is reused wherever the narration didn't change.
+- **Different runtime** (llama.cpp server, LM Studio, MLX, …): implement `LLMProvider`
+  (`packages/pipeline/src/llm/provider.ts`). You need `name`, `model`, `isAvailable()` and
+  `generateJson(req)`, which must return JSON that satisfies `req.schema`. Use it in
+  `PipelineRunner.makeLlm()` (`packages/pipeline/src/pipeline/runner.ts`, which currently constructs
+  `OllamaProvider`), or inject it via `new PipelineRunner(cfg, store, log, { llm })`, and add its
+  settings to `packages/config`. `LLMHelper` keeps doing the caching, concurrency limits and the
+  rewrite guard.
+
+### Add a video style
+
+1. **Camera math** (`workers/processing/audiobook_worker/video/layout.py`): decide the base scale in
+   `base_scale()` and, if the style moves, the camera path (see `build_camera_path()` for how `follow`
+   pans with a dead zone).
+2. **Compositor** (`video/compositor.py` → `ChapterCompositor._run_state()`): add a branch that
+   returns the `(page, center_y, scale, highlights)` state for time `t`. Anything returned in that
+   tuple enables frame reuse automatically. If the style zooms beyond 7 %, raise `MAX_ZOOM` in
+   `video/render_chapter.py` so pages are rasterized sharp enough.
+3. **Types and validation:** add the name to `AnimationStyle` (`packages/types/src/settings.ts`), the
+   `animation` enum in `apps/api/src/projects/settings.schema.ts` and the CLI help
+   (`apps/cli/src/main.ts`).
+4. **UI:** add the option to the web settings form (`apps/web`).
+5. Add a unit test in `workers/processing/tests/test_layout.py`. The style is part of the render
+   cache key, so switching styles re-renders video only.
+
+New highlight looks go in `ChapterCompositor._draw_highlight()` plus the `HighlightStyle` type and
+schema. New themes go in the compositor's `THEMES` plus `VideoTheme`.
+
+### Bangla roadmap
+
+What is already language-aware:
+
+- Sentence segmentation uses ICU (`Intl.Segmenter`) with the project language and handles the
+  dari `।`.
+- Chapter patterns include `অধ্যায়` with Bengali digits.
+- OCR requests Tesseract's `ben` model when `language: "bn"`.
+- The subtitle track is tagged `ben`.
+- The API refuses `bn` with Kokoro and points here.
+
+What is missing:
+
+1. **A Bangla TTS engine** (the main gap): for example Meta's MMS-TTS Bengali VITS model (check its
+   license: the MMS weights are CC-BY-NC 4.0), or a Bangla VITS voice exported to Piper's ONNX format,
+   which would work with the existing Piper engine as-is. Add it as described above.
+2. **Narration normalization for Bangla** (numbers, abbreviations). `normalizeNarration()` currently
+   applies English rules only.
+3. `brew install tesseract-lang` for the `ben` OCR model.
+4. **A Bangla-capable font** for chapter title cards. The compositor's `FONT_CANDIDATES` are
+   Latin-only; macOS ships Kohinoor Bangla and Bangla MN.
+
+---
+
+## Testing
+
+```bash
+pnpm test        # everything
+pnpm test:ts     # vitest: packages/*/test and apps/api/test
+pnpm test:py     # pytest: workers/processing/tests
+```
+
+- **Text** (`packages/pipeline/test/text.test.ts`): de-hyphenation (including compounds and keeping
+  both boxes), header/footer and page-number removal, overprint duplicates, sentence segmentation
+  (abbreviations, initials, long sentences), paragraph segmentation, chapter detection (outline,
+  patterns, fonts, LLM only when ambiguous, with a mocked LLM), highlight regions, narration
+  normalization.
+- **Timeline** (`timeline.test.ts`): sample-exact chapter offsets, cross-page splits, paragraph mode,
+  binary search, contiguous frame ranges (no drift), SRT.
+- **Pipeline integration** (`pipeline.integration.test.ts`, real Python + FFmpeg, fake deterministic
+  TTS): produces a synced MP4/M4A/SRT, resumes without redoing work, theme change re-renders video
+  only, a failed chapter keeps finished chapters and retry continues. It is skipped automatically
+  when the venv or FFmpeg is missing.
+- **API** (`apps/api/test`): error mapping and filter, settings schema, queue behaviour when Redis
+  is down, Prisma store, project service, system controller.
+- **Python** (`workers/processing/tests`): PDF inspect/extract with boxes, corrupt/empty/password/
+  image-only PDFs, page rendering, sample-accurate chapter TTS timings, TTS retry, silence trimming,
+  camera dead zone and pans, page runs, highlight fades, frame counts, on-demand page rasterization.
+
+AI output is never asserted deterministically. The LLM and TTS are mocked or faked behind their
+interfaces.
+
+---
+
+## Copyright
+
+This application is a processing tool. **Only process and distribute books you have the legal right
+to use**: your own works, public-domain books, or books whose license allows it. The web UI shows this
+reminder. Nothing here removes DRM or copy protection, and encrypted PDFs need their password.
+
+---
+
+## Scope of V1
+
+Intentionally **not** included: AI-generated video or images, cloud AI APIs, user accounts or
+authentication, payments, multi-user SaaS, cloud storage, collaboration, a mobile app, Kubernetes or
+microservices.
+
+Also deliberately limited in V1:
+
+- Highlighting is sentence- or paragraph-level, not word-by-word. Estimated word timings exist in the
+  TTS layer but are not rendered.
+- English is the tuned language; Bangla is on the [roadmap](#bangla-roadmap).
+- 9:16 and 1:1 work, but the layout is tuned for 16:9.
+- Encrypted PDFs are supported through the CLI only.
+- One machine, local processes, local storage.
+
+---
+
+## Repository layout
+
+```text
+apps/
+  api/                 NestJS API (src/main.ts) + BullMQ worker (src/worker.ts), Prisma schema & migrations
+  cli/                 `audiobook` CLI (create | inspect | voices | doctor | sample)
+  web/                 Next.js dashboard
+packages/
+  types/               domain model shared by all apps (settings, status, pdf, analysis, audio, timeline, api)
+  config/              .env loading + validation (zod), storage paths
+  shared/              AppError, hashing, atomic fs, semaphore, logger, formatting
+  pipeline/            PipelineRunner, text/, llm/, tts/, audio/, timeline/, python/ bridge, health, maintenance
+workers/processing/    Python worker: audiobook_worker/{pdf,tts,video}, tests/, requirements.txt
+scripts/               setup-mac.sh, setup-python.sh, download-models.sh, lib.sh
+docker/, docker-compose.yml   Postgres + Redis only
+docs/ARCHITECTURE.md   design notes
+storage/               all data (git-ignored)
+```

@@ -215,14 +215,19 @@ fi
 # ── 5. Verify the worker imports cleanly ─────────────────────────────────────
 PYTHONPATH="$WORKER_DIR" "$VPY" - <<'PY'
 import importlib
+from importlib import metadata
 
-mods = [("pymupdf", "PyMuPDF"), ("numpy", "numpy"), ("cv2", "OpenCV"), ("PIL", "Pillow"),
+# (import name, distribution name)
+mods = [("pymupdf", "pymupdf"), ("numpy", "numpy"), ("cv2", "opencv-python-headless"), ("PIL", "pillow"),
         ("soundfile", "soundfile"), ("soxr", "soxr"), ("onnxruntime", "onnxruntime"),
         ("kokoro_onnx", "kokoro-onnx"), ("pytest", "pytest")]
-for mod, label in mods:
-    m = importlib.import_module(mod)
-    ver = getattr(m, "__version__", None) or getattr(m, "VersionBind", "") or ""
-    print(f"    {label:<12} {ver}")
+for mod, dist in mods:
+    importlib.import_module(mod)
+    try:
+        ver = metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        ver = "?"
+    print(f"    {dist:<24} {ver}")
 # The RPC server and every handler module must import (handlers are loaded lazily at runtime).
 for mod in ("audiobook_worker.server", "audiobook_worker.pdf.extract", "audiobook_worker.pdf.render",
             "audiobook_worker.tts.registry", "audiobook_worker.video.render_chapter"):
