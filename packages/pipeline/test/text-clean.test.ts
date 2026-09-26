@@ -40,8 +40,12 @@ describe('drop caps', () => {
         { text: `${FULL} and more of the same body text on this page.`, x: 50, y: 462, size: 8.5 },
       ]),
       page(3, [{ text: `${FULL} ${FULL} and then the chapter goes on.`, x: 50, y: 60, size: 8.5 }]),
+      page(4, [
+        { text: 'Chapter II.', x: 189, y: 100, size: 12.5 },
+        { text: `The second chapter begins here and ${FULL} until it ends.`, x: 61, y: 130, size: 8.5 },
+      ]),
     ];
-    const a = await analyzeCleaned(cleanDocument(pages), meta(3), { language: 'en', skipFrontMatter: true });
+    const a = await analyzeCleaned(cleanDocument(pages), meta(4), { language: 'en', skipFrontMatter: true });
     const ch = a.chapters.find((c) => c.title.startsWith('Chapter I'))!;
     expect(ch).toBeDefined();
     expect(ch.paragraphs.map((p) => p.text).join(' | ')).not.toMatch(/^I \|/);

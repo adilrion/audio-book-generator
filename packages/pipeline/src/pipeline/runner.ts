@@ -706,38 +706,51 @@ export class PipelineRunner {
             tick(`Chapter ${p.tc.index + 1} video (cached)`, p.tc.index);
             return { value: { key: p.key, file: p.file }, cached: true };
           }
-          const r = await pool.call<{ fpsAchieved: number; codec: string }>(
-            'video.render_chapter',
-            {
-              outPath: p.file,
-              width: v.width,
-              height: v.height,
-              fps,
-              frameStart: p.frameStart,
-              frameEnd: p.frameEnd,
-              totalDuration: timeline.duration,
-              chapter: { title: p.tc.title, start: p.tc.start, end: p.tc.end },
-              pages: p.pages,
-              segments: p.segments,
-              style: p.style,
-              encoder: p.encoder,
-              pdfPath: job.pdfPath,
-              password: job.password,
-              pageDir: this.paths.pages(job.pdfHash),
-            },
-            {
-              signal: this.signal,
-              onProgress: (ev: { done: number; total: number; phase?: string }) => {
-                if (ev.phase === 'pages') {
-                  tick(`Chapter ${p.tc.index + 1}: rendering pages ${ev.done}/${ev.total}`, p.tc.index);
-                  return;
-                }
-                done.set(p.tc.index, ev.done);
-                report(ev.done / ev.total);
-                tick(`Rendering chapter ${p.tc.index + 1} — frame ${ev.done.toLocaleString()}/${ev.total.toLocaleString()}`, p.tc.index);
+          let r: { fpsAchieved: number; codec: string };
+          try {
+            r = await pool.call<{ fpsAchieved: number; codec: string }>(
+              'video.render_chapter',
+              {
+                outPath: p.file,
+                width: v.width,
+                height: v.height,
+                fps,
+                frameStart: p.frameStart,
+                frameEnd: p.frameEnd,
+                totalDuration: timeline.duration,
+                chapter: { title: p.tc.title, start: p.tc.start, end: p.tc.end },
+                pages: p.pages,
+                segments: p.segments,
+                style: p.style,
+                encoder: p.encoder,
+                pdfPath: job.pdfPath,
+                password: job.password,
+                pageDir: this.paths.pages(job.pdfHash),
               },
-            },
-          );
+              {
+                signal: this.signal,
+                onProgress: (ev: { done: number; total: number; phase?: string }) => {
+                  if (ev.phase === 'pages') {
+                    tick(`Chapter ${p.tc.index + 1}: rendering pages ${ev.done}/${ev.total}`, p.tc.index);
+                    return;
+                  }
+                  done.set(p.tc.index, ev.done);
+                  report(ev.done / ev.total);
+                  tick(`Rendering chapter ${p.tc.index + 1} — frame ${ev.done.toLocaleString()}/${ev.total.toLocaleString()}`, p.tc.index);
+                },
+              },
+            );
+          } catch (err) {
+            const base = toAppError(err);
+            // Specific, actionable causes pass through; anything else names the chapter (like TTS).
+            if (['CANCELLED', 'DISK_SPACE', 'DISK_FULL', 'FFMPEG_MISSING', 'FFMPEG_ENCODER_MISSING', 'PDF_CORRUPT', 'PDF_PASSWORD', 'PDF_UNSUPPORTED'].includes(base.code)) throw base;
+            throw new AppError('VIDEO_FAILED', `Video rendering failed for Chapter ${p.tc.index + 1}.`, {
+              hint: `${base.code === 'OUT_OF_MEMORY' && base.hint ? `${base.hint} ` : ''}Retry to continue from Chapter ${p.tc.index + 1} — finished chapters are kept.`,
+              chapterIndex: p.tc.index,
+              retryable: true,
+              cause: err,
+            });
+          }
           done.set(p.tc.index, n);
           return { value: { key: p.key, file: p.file }, cached: false, message: `${r.fpsAchieved} fps (${r.codec})` };
         },

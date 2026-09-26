@@ -868,12 +868,14 @@ open an issue with the log. Restart the project to rebuild every artifact.
 
 **Measured on the development machine (M4, 16 GB, macOS 15):**
 
-| Workload | Measured speed |
+| Workload | Measured |
 |---|---|
 | Kokoro-82M ONNX TTS, onnxruntime **CPU** provider | RTF ≈ **0.21** (≈ 5× realtime) per process |
 | Kokoro-82M ONNX TTS, **CoreML** provider | RTF ≈ 0.23, slower, so `cpu` is the default |
+| Kokoro TTS process memory | ≈ 0.7 GB peak RSS (model loaded, one sentence synthesized) |
 | Video, 1920×1080 @ 30 fps, `follow` animation, VideoToolbox | ≈ **90–110 frames/s** per render worker (≈ 3× realtime) |
 | Video, 640×360 @ 15 fps | ≈ 600 frames/s |
+| Encoded 1080p `follow` page video (sample book, 6M cap) | ≈ 1.36 Mbit/s |
 
 **Estimates for a ~280-page book (~10 h of narration).** These are derived from the numbers above,
 not measured end-to-end:
@@ -883,20 +885,21 @@ not measured end-to-end:
 | TTS: 10 h × 0.21 | ≈ 2 h | ≈ 1.2–1.5 h (both processes share the same cores, so less than 2× faster) |
 | Video: 10 h × 30 fps = 1.08 M frames ÷ ~100 fps | ≈ 3 h | ≈ 1.5–2 h |
 | Extraction, analysis, audio mastering, mux | minutes | minutes |
-| **Total with defaults** | | **≈ 3–4 h** |
+| **Total with defaults (estimate)** | | **≈ 3–4 h** |
 
 Knobs, from most to least effect:
 
 - **`animation=static`** is the fastest style. There is no camera motion or zoom, so consecutive
   frames are identical between highlight changes and the compositor reuses them instead of
-  recompositing. `follow` (default) and `kenburns` compose every frame.
-- **fps 24 instead of 30** gives 20 % fewer frames and about 20 % less render time. Use `--fps 24`
-  in the CLI or `video.fps` in the UI/API; `VIDEO_FPS` only sets the CLI default.
-- **Resolution.** Render cost scales with pixel count. Set `video.width`/`video.height` via the
-  UI/API, for example 1280×720.
+  recompositing. `follow` with subtle zoom (the default) and `kenburns` composite every frame;
+  `follow` with `subtleZoom: false` reuses frames between camera moves.
+- **fps 24 instead of 30** gives 20 % fewer frames, so roughly 20 % less render time. Use
+  `--fps 24` in the CLI or `video.fps` through the API; `VIDEO_FPS` only sets the CLI default.
+- **Resolution.** Render cost grows with pixel count. Set `video.width`/`video.height` through the
+  API (`PATCH /projects/:id/settings`), for example 1280×720.
 - **`MAX_CONCURRENT_TTS`** (default 2). Each process loads its own Kokoro model (the fp32 ONNX file
-  is 325 MB). 1 uses the least memory; 3 or more rarely helps on a 10-core M4, because the cores are
-  split between processes.
+  is 325 MB; ≈ 0.7 GB per process in RAM). 1 uses the least memory; 3 or more is unlikely to help on
+  a 10-core M4, because the cores are split between the processes.
 - **`KOKORO_THREADS`** is not a setting. The runner sets it per TTS process to
   `floor(logical CPUs / MAX_CONCURRENT_TTS)`, so each process gets its share of the cores: 5 each on
   a 10-core M4 with 2 processes. Keep `KOKORO_PROVIDER=cpu`.
@@ -904,9 +907,10 @@ Knobs, from most to least effect:
   page canvases, plus an FFmpeg encoder. Use 1 if the Mac gets hot or memory is tight.
 - **Audio only** (`--mode audio` / `outputMode: "audiobook_only"`) skips video entirely.
 - **`--chapters 1-2`** for trial runs. Later full runs reuse those chapters.
-- **`KEEP_INTERMEDIATE=true`** keeps chapter video segments and page rasters, so re-muxing or
-  switching back to an earlier look is instant. It costs disk space. The default `false` frees it
-  after success.
+- **`KEEP_INTERMEDIATE=true`** keeps chapter video segments and page rasters, so switching back to
+  a look you rendered before only needs a re-mux. It costs disk space. The default `false` frees it
+  after success (audio-only changes still don't re-render: the picture is copied from the existing
+  MP4).
 - **Ollama** keeps its model loaded for 10 minutes after the last request (`keep_alive`). That overlaps
   the start of TTS. `ollama ps` shows loaded models, and `ollama stop <model>` frees the memory
   immediately. Keep `MAX_CONCURRENT_LLM=1`.
@@ -915,7 +919,8 @@ Knobs, from most to least effect:
 
 Memory design: pages are extracted one at a time to JSON lines; audio is synthesized sentence by
 sentence and streamed to FLAC; frames are streamed to FFmpeg; page rasters are capped at 12 MP; Python
-pools are shut down between stages.
+pools are shut down between stages. Details per stage are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#memory-strategy-for-a-16-gb-mac).
 
 ---
 
@@ -936,13 +941,17 @@ pools are shut down between stages.
    enum (`packages/config/src/index.ts`), the `tts.engine` enum in
    `apps/api/src/projects/settings.schema.ts` and the engine union in
    `packages/pipeline/src/tts/python-provider.ts`. Register a factory in
-   `packages/pipeline/src/tts/registry.ts`, and add a default voice to `DEFAULT_VOICES`.
+   `packages/pipeline/src/tts/registry.ts`, and add a default voice to `DEFAULT_VOICES`. Add a
+   label to `ENGINE_LABELS` in `apps/web/lib/voices.ts` (the type checker insists) and the name to
+   the `--engine` line of the CLI help in `apps/cli/src/main.ts`.
 4. Model files: add a download step to `scripts/download-models.sh`. If the engine needs a path
    setting, add it to `packages/config` and pass it to Python in `packages/pipeline/src/python/bridge.ts`
    (see `PIPER_MODEL_DIR`).
-5. The UI picks engines and voices from `GET /system/config` and `GET /system/voices`. If you change
-   an engine's output for the same input, bump the provider's `version`, which is part of the TTS
-   cache key.
+5. The UI then lists the engine and its voices from `GET /system/config` and `GET /system/voices`.
+   If you change an engine's output for the same input, bump the provider's `version`, which is
+   part of the TTS cache key.
+6. Test it with `node apps/cli/dist/main.js voices --engine <name>`, `pnpm doctor`, and a short
+   run: `pnpm audiobook ./sample-book.pdf --engine <name> --voice <id> --chapters 1-2`.
 
 For an engine that is not in Python (for example a local HTTP TTS server), implement the
 `TTSProvider` interface (`packages/pipeline/src/tts/types.ts`) in TypeScript and call
@@ -952,9 +961,10 @@ timings**, because the highlight sync depends on them.
 ### How to add another LLM
 
 - **Different Ollama model:** set `OLLAMA_MODEL` (e.g. `qwen3:8b`, `gemma3:4b`, `llama3.2:3b`), run
-  `ollama pull` for it, and that's it. The model name is part of the analysis cache key, so only
-  analysis re-runs. Extraction is reused, and TTS is reused for every chapter whose sentences and
-  chapter numbering didn't change.
+  `ollama pull` for it, and that's it. On a 16 GB Mac, stay around 4B parameters or below: the model
+  is resident next to the TTS processes for 10 minutes after the last request. The model name is
+  part of the analysis cache key, so only cleaning and analysis re-run. Extraction is reused, and
+  TTS is reused for every chapter whose narration and chapter numbering didn't change.
 - **Different runtime** (llama.cpp server, LM Studio, MLX, …): implement `LLMProvider`
   (`packages/pipeline/src/llm/provider.ts`). You need `name`, `model`, `isAvailable()` and
   `generateJson(req)`, which must return JSON that satisfies `req.schema`. Use it in
@@ -975,12 +985,16 @@ timings**, because the highlight sync depends on them.
 3. **Types and validation:** add the name to `AnimationStyle` (`packages/types/src/settings.ts`), the
    `animation` enum in `apps/api/src/projects/settings.schema.ts` and the CLI help
    (`apps/cli/src/main.ts`).
-4. **UI:** add the option to the web settings form (`apps/web`).
-5. Add a unit test in `workers/processing/tests/test_layout.py`. The style is part of the render
-   cache key, so switching styles re-renders video only.
+4. **UI:** add an entry to `ANIMATIONS` in `apps/web/components/settings-form.tsx`.
+5. Add a unit test in `workers/processing/tests/test_layout.py`, then render a sample:
+   `pnpm audiobook ./sample-book.pdf --animation <name> --chapters 1-2`. The style is part of the
+   render cache key, so switching styles re-renders video only.
 
-New highlight looks go in `ChapterCompositor._draw_highlight()` plus the `HighlightStyle` type and
-schema. New themes go in the compositor's `THEMES` plus `VideoTheme`.
+New highlight looks go in `ChapterCompositor._draw_highlight()`, the `HighlightStyle` type and
+schema, the CLI help, the web form, and the browser preview's CSS approximation
+(`apps/web/lib/highlight.ts`, `components/read-along-player.tsx`). New themes go in the
+compositor's `THEMES`, the `VideoTheme` type and schema, and `THEMES` in
+`apps/web/components/settings-form.tsx`.
 
 ### Bangla roadmap
 

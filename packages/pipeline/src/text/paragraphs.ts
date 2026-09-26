@@ -28,6 +28,9 @@ const SOFT_HYPHEN = '\u00ad';
 /** "Revolu-" at a line end (a hyphen right after a letter, any hyphen flavour). */
 const BROKEN_END = /\p{L}[-\u2010\u2011\u00ad]$/u;
 
+/** First token of a list item: bullet, "1.", "(a)", "iv)". */
+const LIST_MARKER = /^([•◦▪‣∙·●○■□*–]|\(?(\d{1,2}|[a-z]|[ivx]{1,4})[.)])$/;
+
 const wordKey = (s: string) => s.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
 /** Words printed whole in the document. Line-break fragments ("com-" / "pleteness") are left out. */
@@ -137,15 +140,24 @@ export function buildParagraphs(pages: CleanPage[], body: number, vocab: Set<str
       const indented = indent > body * 0.8 && indent < body * 8 && Math.abs(l.b[0] - prev.b[0]) > body * 0.5;
       const prevShort = prev.b[2] < st.right - body * 2.5;
       const prevEnds = TERMINAL.test(prev.text) || /[:"”]$/.test(prev.text);
+      // A caption, footnote or block in another size is never part of the same paragraph.
+      const sizeJump = Math.abs(l.size - prev.size) > Math.max(0.8, body * 0.1);
+      // Wrapped list item / hanging indent: the continuation sits further right than the item's first line.
+      const hanging = l.b[0] > prev.b[0] && (LIST_MARKER.test(cur.lines[0].tokens[0]?.t ?? '') || (LOWER_START.test(l.text) && !prevEnds));
+      const newIndent = indented && !hanging;
+      // Two one-line paragraphs in a row, both with the same first-line indent ("“Certainly not.”" / "“I hope,” …").
+      const prevIndent = prev.b[0] - stats.get(prev.page)!.left;
+      const indentedAgain =
+        cur.lines.length === 1 && prevEnds && prevIndent > body * 0.8 && prevIndent < body * 8 && Math.abs(indent - prevIndent) <= body * 0.5 && !LOWER_START.test(l.text);
       if (kind === 'heading') {
         split = Math.abs(l.size - cur.size) > 0.6 || l.page !== prev.page || l.b[1] - prev.b[3] > l.size * 1.6;
       } else if (l.page !== prev.page) {
-        split = prevEnds && (indented || prevShort) && !LOWER_START.test(l.text);
+        split = sizeJump || (prevEnds && (newIndent || prevShort || indentedAgain) && !LOWER_START.test(l.text));
       } else {
         const gap = l.b[1] - prev.b[3];
         const movedUp = l.b[1] < prev.b[1] - body; // new column
-        if (movedUp) split = prevEnds && (indented || prevShort);
-        else split = gap > st.gap + body * 0.45 || indented || (prevShort && prevEnds);
+        if (movedUp) split = sizeJump || (prevEnds && (newIndent || prevShort));
+        else split = sizeJump || gap > st.gap + body * 0.45 || newIndent || indentedAgain || (prevShort && prevEnds);
       }
     }
 
