@@ -24,6 +24,8 @@ export interface FakeTTSOptions {
   tone?: boolean;
   /** Milliseconds to wait before writing (lets tests abort mid-chapter). */
   delayMs?: number;
+  /** With `tone`: seconds of silence at the start of every chapter (onset markers for sync checks). */
+  leadSilenceSec?: number;
 }
 
 /**
@@ -69,7 +71,10 @@ export class FakeTTS implements TTSProvider {
     }
     fs.mkdirSync(path.dirname(o.outPath), { recursive: true });
     const tmp = `${o.outPath}.${process.pid}.${this.calls}.tmp.flac`;
-    const src = this.o.tone ? `sine=frequency=220:sample_rate=${o.sampleRate}` : `anullsrc=r=${o.sampleRate}:cl=mono`;
+    // aevalsrc is evaluated per sample, so the lead-in silence ends exactly on its sample.
+    const src = this.o.tone
+      ? `aevalsrc='if(lt(t,${this.o.leadSilenceSec ?? 0}),0,0.5*sin(2*PI*220*t))':s=${o.sampleRate}`
+      : `anullsrc=r=${o.sampleRate}:cl=mono`;
     await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', src, '-af', `atrim=end_sample=${samples}`, '-ac', '1', '-c:a', 'flac', tmp], { signal: o.signal });
     fs.renameSync(tmp, o.outPath);
     return { audioPath: o.outPath, durationSec: samples / o.sampleRate, sampleRate: o.sampleRate, samples, sentences };

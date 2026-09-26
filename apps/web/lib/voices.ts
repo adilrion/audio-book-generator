@@ -43,9 +43,26 @@ const LANGUAGE_NAMES: Record<string, string> = {
   bg: 'Bulgarian',
 };
 
+let displayNames: Intl.DisplayNames | null | undefined;
+
+/** English name of a language code; the engines report many (macOS `say` alone has ~35). */
 export function languageName(code: string): string {
   const base = code.toLowerCase().split(/[-_]/)[0];
-  return LANGUAGE_NAMES[base] ?? code.toUpperCase();
+  if (LANGUAGE_NAMES[base]) return LANGUAGE_NAMES[base];
+  if (displayNames === undefined) {
+    try {
+      displayNames = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' });
+    } catch {
+      displayNames = null;
+    }
+  }
+  let name: string | undefined;
+  try {
+    name = displayNames?.of(base);
+  } catch {
+    name = undefined; // not a well-formed language code
+  }
+  return name && name.toLowerCase() !== base ? name : code.toUpperCase();
 }
 
 /** Accent hint from well-known voice id conventions (Kokoro af_/bf_, Piper en_US-/en_GB-). */

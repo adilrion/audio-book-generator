@@ -19,6 +19,8 @@ export interface ReadAlongPlayerProps {
   audioSrc: string;
   highlightStyle: HighlightStyle;
   highlightColor: string;
+  /** Open at this time (seconds), e.g. from a `?t=` deep link. */
+  initialTime?: number;
 }
 
 function HighlightBox({ style, color, box }: { style: HighlightStyle; color: string; box: { left: number; top: number; width: number; height: number } }) {
@@ -39,7 +41,7 @@ function HighlightBox({ style, color, box }: { style: HighlightStyle; color: str
  * current segment's rects (PDF points → % of the page box). The playhead is sampled every
  * animation frame; a binary search finds the segment, and React only re-renders when it changes.
  */
-export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle, highlightColor }: ReadAlongPlayerProps) {
+export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle, highlightColor, initialTime }: ReadAlongPlayerProps) {
   const segments = timeline.segments;
   const chapters = timeline.chapters;
   const duration = timeline.duration || segments.at(-1)?.end || 0;
@@ -51,6 +53,8 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
   const timeRef = useRef<HTMLSpanElement>(null);
   const idxRef = useRef(-1);
   const draggingRef = useRef(false);
+  /** Pending start position; applied once the audio can seek, then cleared. */
+  const startRef = useRef(initialTime !== undefined && Number.isFinite(initialTime) ? Math.max(0, Math.min(duration, initialTime)) : undefined);
 
   const [idx, setIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
@@ -92,8 +96,16 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
       cancelAnimationFrame(raf);
       paint(a.currentTime);
     };
-    const onSeek = () => paint(a.currentTime);
-    const onReady = () => setAudioState('ready');
+    const onSeek = () => paint(startRef.current ?? a.currentTime);
+    const applyStart = () => {
+      if (startRef.current === undefined) return;
+      a.currentTime = startRef.current;
+      startRef.current = undefined;
+    };
+    const onReady = () => {
+      setAudioState('ready');
+      applyStart();
+    };
     const onError = () => setAudioState('error');
     a.addEventListener('play', onPlay);
     a.addEventListener('pause', onPause);
@@ -103,8 +115,9 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
     a.addEventListener('timeupdate', onSeek);
     a.addEventListener('loadedmetadata', onReady);
     a.addEventListener('error', onError);
-    if (a.readyState >= 1) setAudioState('ready');
-    paint(a.currentTime);
+    // Page + highlight at the start position right away, even before the audio has loaded.
+    paint(startRef.current ?? a.currentTime);
+    if (a.readyState >= 1) onReady();
     return () => {
       cancelAnimationFrame(raf);
       a.removeEventListener('play', onPlay);
@@ -130,6 +143,7 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
     (t: number) => {
       const a = audioRef.current;
       const clamped = Math.max(0, Math.min(duration, t));
+      startRef.current = undefined; // the user's choice wins over a pending ?t= start
       if (a) a.currentTime = clamped;
       paint(clamped);
     },
@@ -223,7 +237,9 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
   const displayWidth = `min(100%, calc(max(320px, 100dvh - 360px) * ${pw} / ${ph}))`;
 
   return (
-    <div className="grid gap-4 outline-none" onKeyDown={onPlayerKey}>
+    // tabIndex -1: clicking the page focuses the player (not the surrounding tab panel), so the
+    // shortcuts in the tip below work right after clicking a sentence.
+    <div className="grid gap-4 outline-none" onKeyDown={onPlayerKey} tabIndex={-1} role="region" aria-label="Read-along player">
       <audio ref={audioRef} src={audioSrc} preload="metadata" className="hidden" />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">

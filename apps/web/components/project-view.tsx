@@ -67,7 +67,8 @@ function PageSkeleton() {
   );
 }
 
-export function ProjectView({ id }: { id: string }) {
+/** `initialTime` (seconds, from `?t=`) opens the read-along preview at that moment. */
+export function ProjectView({ id, initialTime }: { id: string; initialTime?: number }) {
   const [pollMs, setPollMs] = useState<number | false>(false);
   const project = useApi(`project:${id}`, (signal) => api.project(id, signal), { interval: pollMs });
   const config = useApi('config', (signal) => api.config(signal));
@@ -147,6 +148,7 @@ export function ProjectView({ id }: { id: string }) {
                 audioSrc={outputUrl(p.id, 'audiobook.m4a', { inline: true, v: preview.m4a?.size })}
                 highlightStyle={p.settings.video.highlightStyle}
                 highlightColor={p.settings.video.highlightColor}
+                initialTime={initialTime}
               />
             ) : timeline.error ? (
               <ApiErrorAlert error={timeline.error} title="The preview could not be loaded" onRetry={() => void timeline.refresh()} />
@@ -254,7 +256,7 @@ export function ProjectView({ id }: { id: string }) {
 
       {!showPreviewFirst && previewCard}
 
-      <Card>
+      <Card id="settings" className="scroll-mt-20">
         <CardHeader>
           <CardTitle>Settings</CardTitle>
           <CardDescription className="flex items-start gap-1.5">

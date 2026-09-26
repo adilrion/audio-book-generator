@@ -21,6 +21,23 @@ export function segmentIndexAt(segments: readonly Pick<TimelineSegment, 'start'>
   return ans;
 }
 
+/**
+ * `?t=` deep-link value → seconds: "83.5", "1:23", "1:02:03", "1m23s", "1h2m3s". Undefined when
+ * missing or malformed. Takes the first value when the param is repeated.
+ */
+export function parseTimeParam(raw: string | string[] | undefined): number | undefined {
+  const v = (Array.isArray(raw) ? raw[0] : raw)?.trim().toLowerCase();
+  if (!v) return undefined;
+  let sec: number | undefined;
+  if (/^\d+(?:\.\d+)?$/.test(v)) sec = Number(v);
+  else if (/^\d+(?::[0-5]\d){1,2}(?:\.\d+)?$/.test(v)) sec = v.split(':').reduce((n, part) => n * 60 + Number(part), 0);
+  else {
+    const m = v.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/);
+    if (m && (m[1] || m[2] || m[3])) sec = Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+  }
+  return sec !== undefined && Number.isFinite(sec) ? sec : undefined;
+}
+
 /** Chapter containing time `t` (chapters are contiguous and sorted by start). */
 export function chapterIndexAt(chapters: readonly Pick<TimelineChapter, 'start'>[], t: number): number {
   return Math.max(0, segmentIndexAt(chapters, t));

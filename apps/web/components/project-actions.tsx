@@ -1,7 +1,7 @@
 'use client';
 
 import type { ProjectDetail } from '@app/types';
-import { CircleX, Eraser, LoaderCircle, Play, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { CircleX, Eraser, LoaderCircle, Play, RotateCcw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useId, useState } from 'react';
 import { ApiErrorAlert, ErrorHint } from '@/components/api-error-alert';
@@ -115,8 +115,17 @@ export function ProjectActions({ project, onChanged, onNotice }: ProjectActionsP
           <AlertTitle>{err.message}</AlertTitle>
           <AlertDescription>
             <ErrorHint hint={err.hint} />
-            {err.retryable === false && !err.hint && <p>Retrying alone may not help — check the settings or the PDF first.</p>}
-            <div className="mt-2 text-foreground">{retryButton}</div>
+            {err.retryable === false && <p>Retrying with the same settings will not fix this — change the settings (or the PDF) first.</p>}
+            <div className="mt-2 flex flex-wrap gap-2 text-foreground">
+              {err.retryable === false && (
+                <Button asChild>
+                  <a href="#settings">
+                    <SlidersHorizontal aria-hidden /> Review settings
+                  </a>
+                </Button>
+              )}
+              {retryButton}
+            </div>
           </AlertDescription>
         </Alert>
       )}

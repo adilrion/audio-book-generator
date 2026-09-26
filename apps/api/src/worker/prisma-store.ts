@@ -7,8 +7,39 @@ import type { PrismaService } from '../prisma/prisma.service';
 const json = (v: unknown) => v as Prisma.InputJsonValue;
 const date = (s?: string) => (s ? new Date(s) : null);
 
+/**
+ * Applies writes one at a time, in call order. The runner fires progress writes without awaiting
+ * them, and on a connection pool an older write can otherwise finish after a newer one (e.g. a
+ * "Rendering 97%" landing after COMPLETED). A write still waiting for its turn is replaced by a
+ * newer one with the same key, so a slow database gets the latest state instead of a backlog.
+ */
+class OrderedWrites {
+  private tail: Promise<unknown> = Promise.resolve();
+  private readonly waiting = new Map<string, { run: () => Promise<unknown>; done: Promise<void> }>();
+
+  push(key: string | undefined, run: () => Promise<unknown>): Promise<void> {
+    const queued = key === undefined ? undefined : this.waiting.get(key);
+    if (queued) {
+      queued.run = run;
+      return queued.done;
+    }
+    const entry = { run } as { run: () => Promise<unknown>; done: Promise<void> };
+    entry.done = this.tail.then(() => {
+      if (key !== undefined) this.waiting.delete(key);
+      return entry.run();
+    }) as Promise<void>;
+    entry.done = entry.done.then(() => undefined);
+    if (key !== undefined) this.waiting.set(key, entry);
+    this.tail = entry.done.catch(() => undefined);
+    return entry.done;
+  }
+}
+
 /** PipelineStore backed by PostgreSQL — gives the UI live steps/progress and the entities. */
 export class PrismaStore implements PipelineStore {
+  private readonly snapshots = new OrderedWrites();
+  private readonly stepWrites = new OrderedWrites();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly projectId: string,
@@ -45,32 +76,35 @@ export class PrismaStore implements PipelineStore {
     };
   }
 
-  async saveSteps(steps: StepRecord[]): Promise<void> {
-    await this.prisma.$transaction(
-      steps.map((s, i) =>
-        this.prisma.processingStep.upsert({
-          where: { projectId_key: { projectId: this.projectId, key: s.key } },
-          create: { projectId: this.projectId, key: s.key, ...this.data(s, i) },
-          update: this.data(s, i),
-        }),
+  saveSteps(steps: StepRecord[]): Promise<void> {
+    const rows = steps.map((s, i) => ({ key: s.key, data: this.data(s, i) }));
+    return this.stepWrites.push(undefined, () =>
+      this.prisma.$transaction(
+        rows.map(({ key, data }) =>
+          this.prisma.processingStep.upsert({
+            where: { projectId_key: { projectId: this.projectId, key } },
+            create: { projectId: this.projectId, key, ...data },
+            update: data,
+          }),
+        ),
       ),
     );
   }
 
-  async updateStep(s: StepRecord): Promise<void> {
+  updateStep(s: StepRecord): Promise<void> {
+    // Captured now: the runner keeps mutating the step object (progress) after this call.
     const d = this.data(s);
-    await this.prisma.processingStep.upsert({
+    const args = {
       where: { projectId_key: { projectId: this.projectId, key: s.key } },
       create: { projectId: this.projectId, key: s.key, ...d, order: 999 },
       update: { ...d, error: s.error ? json(s.error) : (null as unknown as Prisma.InputJsonValue) },
-    });
+    };
+    return this.stepWrites.push(s.key, () => this.prisma.processingStep.upsert(args));
   }
 
-  async updateSnapshot(snap: ProgressSnapshot): Promise<void> {
-    await this.prisma.project.update({
-      where: { id: this.projectId },
-      data: { status: snap.status, progress: snap.progress, snapshot: json(snap) },
-    });
+  updateSnapshot(snap: ProgressSnapshot): Promise<void> {
+    const data = { status: snap.status, progress: snap.progress, snapshot: json(snap) };
+    return this.snapshots.push('snapshot', () => this.prisma.project.update({ where: { id: this.projectId }, data }));
   }
 
   async saveAnalysis(a: Analysis, analysisKey: string): Promise<void> {

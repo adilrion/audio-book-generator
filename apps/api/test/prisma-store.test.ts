@@ -268,3 +268,91 @@ describe('PrismaStore other writes', () => {
     expect(f.of('project', 'update')[0].args).toEqual({ where: { id: 'proj-1' }, data: { durationSec: 4001.5 } });
   });
 });
+
+/**
+ * The runner fires progress writes without awaiting them (throttled snapshots, step progress
+ * every 2 s). Queries can run on different pool connections, so an older write that is slow to
+ * get a connection can finish after a newer one. The store must apply them in call order.
+ */
+describe('PrismaStore write ordering', () => {
+  function slowFirstWrite() {
+    const state: { project: Record<string, unknown>; steps: Map<string, Record<string, unknown>> } = { project: {}, steps: new Map() };
+    let n = 0;
+    const delay = () => new Promise((r) => setTimeout(r, n++ === 0 ? 40 : 1)); // the first write is slow
+    const prisma = {
+      project: {
+        async update({ data }: { data: Record<string, unknown> }) {
+          await delay();
+          Object.assign(state.project, data);
+        },
+      },
+      processingStep: {
+        async upsert({ where, update }: { where: { projectId_key: { key: string } }; update: Record<string, unknown> }) {
+          await delay();
+          state.steps.set(where.projectId_key.key, { ...update });
+        },
+      },
+    };
+    return { prisma: prisma as unknown as PrismaService, state };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 80));
+
+  it('a late progress snapshot never overwrites the final COMPLETED', async () => {
+    const f = slowFirstWrite();
+    const store = new PrismaStore(f.prisma, 'proj-1');
+    void store.updateSnapshot({ status: 'RENDERING', progress: 97, message: 'Rendering', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await store.updateSnapshot({ status: 'COMPLETED', progress: 100, message: 'Done', updatedAt: '2026-01-01T00:00:01.000Z' });
+    await settle();
+    expect(f.state.project).toMatchObject({ status: 'COMPLETED', progress: 100 });
+  });
+
+  it('a late progress snapshot never overwrites FAILED', async () => {
+    const f = slowFirstWrite();
+    const store = new PrismaStore(f.prisma, 'proj-1');
+    void store.updateSnapshot({ status: 'GENERATING_AUDIO', progress: 30, updatedAt: '2026-01-01T00:00:00.000Z' });
+    await store.updateSnapshot({ status: 'FAILED', progress: 30, error: { code: 'TTS_FAILED', message: 'Speech generation failed.', retryable: true }, updatedAt: '2026-01-01T00:00:01.000Z' });
+    await settle();
+    expect(f.state.project.status).toBe('FAILED');
+  });
+
+  it('coalesces queued snapshots: only the newest waiting one is written', async () => {
+    const f = slowFirstWrite();
+    const writes: unknown[] = [];
+    const orig = (f.prisma as unknown as { project: { update: (a: { data: { snapshot: unknown } }) => Promise<void> } }).project;
+    const update = orig.update;
+    orig.update = async (a) => {
+      writes.push((a.data.snapshot as { progress: number }).progress);
+      return update(a);
+    };
+    const store = new PrismaStore(f.prisma, 'proj-1');
+    const all = [1, 2, 3, 4].map((progress) => store.updateSnapshot({ status: 'RENDERING', progress, updatedAt: 'x' }));
+    await Promise.all(all);
+    expect(writes.at(-1)).toBe(4);
+    expect(writes.length).toBeLessThanOrEqual(2); // 2 and 3 were superseded while waiting
+    expect(f.state.project.progress).toBe(4);
+  });
+
+  it('a late step progress write never overwrites the step COMPLETED', async () => {
+    const f = slowFirstWrite();
+    const store = new PrismaStore(f.prisma, 'proj-1');
+    const startedAt = '2026-01-01T00:00:00.000Z';
+    void store.updateStep({ key: 'TTS_CHAPTER_1', stage: 'TTS', status: 'RUNNING', progress: 87, startedAt });
+    await store.updateStep({ key: 'TTS_CHAPTER_1', stage: 'TTS', status: 'COMPLETED', progress: 100, startedAt, finishedAt: '2026-01-01T00:01:00.000Z' });
+    await settle();
+    expect(f.state.steps.get('TTS_CHAPTER_1')).toMatchObject({ status: 'COMPLETED', progress: 100 });
+  });
+
+  it('one failed write does not block the ones after it', async () => {
+    let calls = 0;
+    const prisma = {
+      project: {
+        async update() {
+          if (calls++ === 0) throw new Error('connection reset');
+        },
+      },
+    } as unknown as PrismaService;
+    const store = new PrismaStore(prisma, 'proj-1');
+    await expect(store.updateSnapshot({ status: 'RENDERING', progress: 1, updatedAt: 'x' })).rejects.toThrow('connection reset');
+    await expect(store.updateSnapshot({ status: 'COMPLETED', progress: 100, updatedAt: 'y' })).resolves.toBeUndefined();
+  });
+});

@@ -139,7 +139,7 @@ export function ProcessingPanel({ project }: { project: ProjectDetail }) {
                 </span>
               ) : null}
             </p>
-            <p className="truncate text-xs text-muted-foreground" aria-live="polite">
+            <p className="line-clamp-2 text-xs text-muted-foreground" aria-live="polite">
               {phase === 'idle'
                 ? 'Review the settings below, then press Start.'
                 : phase === 'queued'

@@ -12,7 +12,7 @@ import {
   type VideoTheme,
 } from '@app/types';
 import { Captions, Film, Headphones, Info, LoaderCircle, Mic, Palette, ScanText, Sparkles, TriangleAlert } from 'lucide-react';
-import { type ReactNode, useEffect, useId } from 'react';
+import { type ReactNode, useEffect, useId, useState } from 'react';
 import { CommandSnippet } from '@/components/copy-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -193,14 +193,20 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
   const engineId = useId();
   const voiceId = useId();
 
-  // If the chosen voice is not installed for this engine, switch to the engine's default/first voice.
+  // If the chosen voice is not installed for this engine, switch to the engine's default/first voice —
+  // and say so: on a saved project the draft now differs from the voice the server will use.
   const currentVoice = settings.tts.voice;
+  const [replaced, setReplaced] = useState<{ from: string; to: string }>();
   useEffect(() => {
     if (!list.length || list.some((v) => v.id === currentVoice)) return;
     const next = pickVoice(list, config?.defaultVoices?.[engine], settings.language);
-    if (next && next !== currentVoice) update((d) => void (d.tts.voice = next));
+    if (next && next !== currentVoice) {
+      setReplaced(currentVoice ? { from: currentVoice, to: next } : undefined);
+      update((d) => void (d.tts.voice = next));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [list, currentVoice, engine]);
+  const replacedNote = replaced && replaced.to === currentVoice ? replaced : undefined;
 
   const unavailable = voices.data && voices.data.engine === engine && !voices.data.available;
   const install = unavailable ? splitHint(voices.data?.message) : undefined;
@@ -225,8 +231,8 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
             <SelectContent>
               {engines.map((e) => (
                 <SelectItem key={e} value={e}>
-                  <span className="font-medium">{ENGINE_LABELS[e]?.name ?? e}</span>
-                  <span className="text-muted-foreground">{ENGINE_LABELS[e]?.description}</span>
+                  <span className="shrink-0 font-medium">{ENGINE_LABELS[e]?.name ?? e}</span>
+                  <span className="min-w-0 truncate text-muted-foreground">{ENGINE_LABELS[e]?.description}</span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -256,8 +262,8 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
                   </SelectLabel>
                   {g.voices.map((v) => (
                     <SelectItem key={v.id} value={v.id}>
-                      <span className="font-medium">{v.name}</span>
-                      {voiceMeta(v) && <span className="text-muted-foreground">{voiceMeta(v)}</span>}
+                      <span className="shrink-0 font-medium">{v.name}</span>
+                      {voiceMeta(v) && <span className="min-w-0 truncate text-muted-foreground">{voiceMeta(v)}</span>}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -267,6 +273,15 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
         </Field>
       </div>
 
+      {replacedNote && (
+        <p className="-mt-2 flex items-start gap-1.5 text-xs text-muted-foreground" role="status">
+          <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+          <span>
+            The voice “{replacedNote.from}” is not installed for {ENGINE_LABELS[engine]?.name ?? engine}, so{' '}
+            {list.find((v) => v.id === replacedNote.to)?.name ?? replacedNote.to} is selected instead.
+          </span>
+        </p>
+      )}
       {voices.error && !voices.data && (
         <p className="flex items-center gap-1.5 text-xs text-destructive">
           <TriangleAlert className="size-3.5" aria-hidden /> {voices.error.message}

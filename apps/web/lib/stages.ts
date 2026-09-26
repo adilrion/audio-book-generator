@@ -60,19 +60,23 @@ export function projectPhase(p: Pick<ProjectDetail, 'status' | 'steps' | 'snapsh
 }
 
 /**
- * While a run is in progress, steps finished by an *earlier* run still carry COMPLETED/FAILED
- * until the runner reaches them again. Every run starts with EXTRACT, so anything finished
- * before the current EXTRACT started is shown as pending for this run.
+ * Steps of the latest run. Steps finished by an *earlier* run keep their COMPLETED/FAILED status
+ * until the runner reaches them again, and steps outside this run's plan (another chapter range,
+ * video steps of an earlier audiobook-and-video run) are never touched again. Every run starts
+ * with EXTRACT, so anything finished before the current EXTRACT started is stale:
+ * - while running, or after a failed / cancelled run, it is shown as pending (not reached yet);
+ * - after a completed run it was not part of the run at all, so it is left out (as are steps
+ *   that never finished — a completed run finished every step it planned).
  */
 export function currentRunSteps(p: Pick<ProjectDetail, 'status' | 'steps' | 'snapshot'>): StepRecord[] {
-  if (projectPhase(p) !== 'active') return p.steps;
+  const phase = projectPhase(p);
+  if (phase === 'idle' || phase === 'queued') return p.steps;
   const runStart = p.steps.find((s) => s.key === 'EXTRACT')?.startedAt;
   if (!runStart) return p.steps;
-  return p.steps.map((s) =>
-    s.key !== 'EXTRACT' && (s.status === 'COMPLETED' || s.status === 'FAILED' || s.status === 'SKIPPED') && (!s.finishedAt || s.finishedAt < runStart)
-      ? { ...s, status: 'PENDING', progress: 0, cached: false, error: undefined, message: undefined }
-      : s,
-  );
+  const finished = (s: StepRecord) => s.status === 'COMPLETED' || s.status === 'FAILED' || s.status === 'SKIPPED';
+  const stale = (s: StepRecord) => s.key !== 'EXTRACT' && finished(s) && (!s.finishedAt || s.finishedAt < runStart);
+  if (phase === 'completed') return p.steps.filter((s) => s.key === 'EXTRACT' || (s.status !== 'FAILED' && finished(s) && !stale(s)));
+  return p.steps.map((s) => (stale(s) ? { ...s, status: 'PENDING', progress: 0, cached: false, error: undefined, message: undefined } : s));
 }
 
 const earliest = (xs: (string | undefined)[]) => xs.filter(Boolean).sort()[0];
@@ -136,12 +140,14 @@ export function deriveStages(p: Pick<ProjectDetail, 'status' | 'steps' | 'snapsh
 /** The error to show for a failed project (snapshot error, else the failed step's). */
 export function projectError(p: Pick<ProjectDetail, 'status' | 'steps' | 'snapshot'>): UserFacingError | undefined {
   if (p.status !== 'FAILED') return undefined;
-  return p.snapshot?.error ?? p.steps.find((s) => s.status === 'FAILED')?.error;
+  return p.snapshot?.error ?? currentRunSteps(p).find((s) => s.status === 'FAILED')?.error;
 }
 
 /** "Retry Chapter 7", "Retry Final Export", or plain "Retry". chapterIndex is 0-based. */
 export function retryLabel(err: UserFacingError | undefined, steps: StepRecord[] = []): string {
   if (!err) return 'Retry';
+  // Crash / reboot mid-run (worker recoverInterrupted): the hint tells the user to "Click Resume".
+  if (err.code === 'INTERRUPTED') return 'Resume';
   if (err.chapterIndex !== undefined && err.chapterIndex !== null) return `Retry Chapter ${err.chapterIndex + 1}`;
   const m = err.stepKey?.match(/^(TTS|VIDEO)_CHAPTER_(\d+)$/);
   if (m) return `Retry Chapter ${m[2]}`;

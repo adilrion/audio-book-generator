@@ -14,6 +14,9 @@ const hasPython = fs.existsSync(base.PYTHON_BIN);
 
 const byKey = (steps: StepRecord[]) => Object.fromEntries(steps.map((s) => [s.key, s]));
 const videoSteps = (steps: StepRecord[]) => steps.filter((s) => s.key.startsWith('VIDEO_CHAPTER_'));
+/** Stream types, ignoring the MP4 chapter text track (reported as `data`). */
+const streamTypes = (file: string) =>
+  execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', file]).toString().trim().split('\n').filter((t) => t !== 'data').sort();
 
 describe.skipIf(!hasPython || !hasFfmpeg)('runner cache keys', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-keys-'));
@@ -83,13 +86,11 @@ describe.skipIf(!hasPython || !hasFfmpeg)('runner cache keys', () => {
     expect(second.st.MUX.cached).toBe(false);
     expect(videoSteps(second.store.steps).every((s) => s.cached)).toBe(true);
     const mp4 = second.r.outputs.find((o) => o.name === 'audiobook.mp4')!.path;
-    const streams = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', mp4]).toString().trim().split('\n');
-    expect(streams.sort()).toEqual(['audio', 'video']);
+    expect(streamTypes(mp4)).toEqual(['audio', 'video']);
     // and back on: subtitles return, still without rendering
     const third = await runJob(job);
     expect(videoSteps(third.store.steps).every((s) => s.cached)).toBe(true);
-    const streams3 = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', mp4]).toString().trim().split('\n');
-    expect(streams3.sort()).toEqual(['audio', 'subtitle', 'video']);
+    expect(streamTypes(mp4)).toEqual(['audio', 'subtitle', 'video']);
   }, 180_000);
 
   it('audio normalization change re-masters + re-muxes without re-rendering video', async () => {
