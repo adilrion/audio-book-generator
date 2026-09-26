@@ -7,23 +7,17 @@ import { CommandSnippet } from '@/components/copy-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import type { ApiError } from '@/lib/api';
+import { splitHint } from '@/lib/hint';
 import { cn } from '@/lib/utils';
 
-/** Pull a runnable command out of hints like "Start it with: docker compose up -d redis". */
-export function splitHint(hint?: string): { text?: string; command?: string } {
-  if (!hint) return {};
-  const m = hint.match(/^(.*?(?:with|run|Run|install|Install)\s*:?)\s+((?:pnpm|docker|brew|ollama|pip|npm|workers\/|\.venv|bash|python|cd)\S*.*)$/);
-  if (m) return { text: m[1].replace(/[:\s]+$/, '') + ':', command: m[2].trim() };
-  return { text: hint };
-}
-
 export function ErrorHint({ hint }: { hint?: string }) {
-  const { text, command } = splitHint(hint);
+  const { text, command, after } = splitHint(hint);
   if (!text && !command) return null;
   return (
     <div className="mt-1 grid w-full gap-1.5 text-foreground/80">
       {text && <p>{text}</p>}
       {command && <CommandSnippet command={command} />}
+      {after && <p>{after.charAt(0).toUpperCase() + after.slice(1)}</p>}
     </div>
   );
 }

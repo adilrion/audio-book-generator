@@ -82,7 +82,7 @@ function ProjectTable({ projects, now }: { projects: ProjectSummary[]; now: numb
       <table className="hidden w-full text-sm md:table">
         <thead className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
           <tr>
-            <th className="px-5 py-2.5 font-medium">Project</th>
+            <th className="w-[40%] px-5 py-2.5 font-medium">Project</th>
             <th className="px-3 py-2.5 font-medium">Status</th>
             <th className="px-3 py-2.5 text-right font-medium">Pages / words</th>
             <th className="px-3 py-2.5 text-right font-medium">Narration</th>

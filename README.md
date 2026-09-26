@@ -91,12 +91,11 @@ On an Apple Silicon Mac with [Homebrew](https://brew.sh), Node.js 20.11 or newer
 Desktop or OrbStack) installed:
 
 ```bash
-pnpm install              # needs pnpm 11 (see Requirements)
-pnpm run setup            # one-shot setup: brew deps, .env, Postgres/Redis, Python venv, models, build, doctor
-                          # (use `pnpm run setup`, not `pnpm setup`: that is a pnpm built-in command)
+bash scripts/setup-mac.sh   # one-shot setup: brew deps, .env, Postgres/Redis, Python venv, models, build, doctor
+                            # (same as `pnpm run setup`; plain `pnpm setup` is a pnpm built-in command)
 
-pnpm audiobook ./book.pdf # CLI: writes ./output/audiobook.mp4, audiobook.m4a, subtitles.srt, chapters.txt
-pnpm dev                  # API :4000 + worker + web UI on http://localhost:3000
+pnpm audiobook ./book.pdf   # CLI: writes ./output/audiobook.mp4, audiobook.m4a, subtitles.srt, chapters.txt
+pnpm dev                    # API :4000 + worker + web UI on http://localhost:3000
 ```
 
 If you don't have a book at hand, the CLI can generate a small sample:
@@ -467,12 +466,12 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 | `--speed <n>` | 0.5–2.0 (`1`) | Speaking rate |
 | `--aspect` | `16:9` \| `9:16` \| `1:1` (`16:9`) | 1920×1080, 1080×1920 or 1080×1080 |
 | `--fps <n>` | `$VIDEO_FPS` (30) | Frame rate |
-| `--animation` | `follow` \| `kenburns` \| `static` (`follow`) | Camera style (see [video styles](#add-a-video-style)) |
+| `--animation` | `follow` \| `kenburns` \| `static` (`follow`) | Camera style (see [video styles](#how-to-add-another-video-style)) |
 | `--highlight` | `sentence` \| `paragraph` (`sentence`) | Highlight granularity |
 | `--highlight-style` | `marker` \| `underline` \| `box` (`marker`) | Highlight look |
 | `--theme` | `paper` \| `light` \| `dark` (`paper`) | Background and title-card colors |
 | `--chapters <a-b>` | e.g. `3` or `1-4` | Narrate only these chapters (1-based, as numbered after detection, including "Opening Pages") |
-| `--skip-front-matter` | off | Drop content before the first chapter and front-matter chapters (copyright, contents, …) |
+| `--skip-front-matter` | off | Skip content before the first chapter (copyright page, table of contents, …) |
 | `--no-llm` | off | Don't use Ollama for this run |
 | `--ocr` | `auto` \| `off` \| `force` (`auto`) | `auto` OCRs pages with no text layer but with images |
 | `--password <pw>` | | Password for an encrypted PDF (CLI only, see [troubleshooting](#password-protected-pdf)) |
@@ -484,18 +483,33 @@ state lives in `storage/output/cli-…/state.json`. Running the same PDF again *
 every cached stage. Only settings that changed cause recomputation. Ctrl-C stops cleanly; run the
 same command again to continue. `timeline.json` stays in `storage/output/cli-…/`.
 
-Example run:
+Example: the bundled sample book at the default 1920×1080 @ 30 fps. The step messages are real
+values from a run on the M4; the order of parallel chapters varies.
 
 ```text
-📖  book.pdf  (1.2 MB)
+📖  sample-book.pdf  (99 KB)
     voice kokoro/af_heart · 1920x1080@30 follow
 
-  ✓ PDF Analysis           212 pages, 71,480 words
-  ✓ Text Cleaning          2 running headers/footers, 198 page numbers removed
-  ✓ Chapter Detection      14 chapters (toc), 4,902 sentences
-  ✓ tts chapter 1          (cached)
-  ███████████░░░░░░░░░░░░░  47.3%  GENERATING_AUDIO · chapter 6/14  Narrating Chapter 6 … sentence 212/390
+  ✓ PDF Analysis           3 pages, 300 words
+  ✓ Text Cleaning          1 running headers/footers, 3 page numbers removed
+  ✓ Chapter Detection      3 chapters (toc), 25 sentences
+  ✓ tts chapter 1          0:05
+  ✓ tts chapter 2          0:54
+  ✓ tts chapter 3          0:58
+  ✓ Audio Mastering
+  ✓ Video Preparation      25 highlight segments
+  ✓ video chapter 1        87.3 fps (h264_videotoolbox)
+  ✓ video chapter 2        102.8 fps (h264_videotoolbox)
+  ✓ video chapter 3        111.3 fps (h264_videotoolbox)
+  ✓ Final Export           A/V drift 47 ms
+
+✅  Done in … — narration length 1:57
+    ./output/
+      audiobook.mp4    …
 ```
+
+While a stage runs, a live line shows `█████░░░  47.3%  GENERATING_AUDIO · chapter 6/14  Narrating …`.
+A second run of the same command prints `(cached)` for every step.
 
 ---
 
@@ -601,7 +615,7 @@ Each stage's cache key is a hash of exactly the inputs that affect its output:
 | **Voice**, engine, speed or pause lengths | `TTS_CHAPTER_n` (all chapters) + audio master + timeline + video + mux. **Extraction and LLM/analysis are reused.** |
 | Loudness normalization, `AUDIO_BITRATE`, `AUDIO_ENCODER` | `AUDIO_MERGE` + `MUX`. Video segments are reused only if they are still on disk (`KEEP_INTERMEDIATE=true`); otherwise they are re-rendered. |
 | Embedded subtitles on/off | `MUX` (plus video re-render if the segments were cleaned up) |
-| LLM on/off, `OLLAMA_MODEL`, skip front matter, `LLM_PRONUNCIATION` | `CLEAN` + `ANALYZE`. TTS is redone only for chapters whose sentences or narration actually changed. |
+| LLM on/off, `OLLAMA_MODEL`, skip front matter, `LLM_PRONUNCIATION` | `CLEAN` + `ANALYZE`, then TTS only for chapters whose sentences changed. Sentence ids are positional (`c3-p12-s1`), so a change that shifts chapter numbering, such as dropping the "Opening Pages" chapter, re-narrates the chapters after it. |
 | Chapter range | Already-narrated chapters are reused; audio master, timeline and video are rebuilt because chapter start times shift |
 | OCR mode or language | `EXTRACT` and everything after it |
 | Nothing (a new project from the same PDF) | Extraction, analysis and chapter audio are shared through the content-addressed cache |
@@ -780,7 +794,7 @@ pools are shut down between stages.
 
 ## Extending
 
-### Add another TTS model
+### How to add another TTS model
 
 1. **Python engine:** create `workers/processing/audiobook_worker/tts/<name>_engine.py` with a
    subclass of `TTSEngine` (`tts/base.py`):
@@ -808,11 +822,12 @@ For an engine that is not in Python (for example a local HTTP TTS server), imple
 `registerTTSEngine(name, factory)`. `synthesizeSegments()` must return **sample-exact sentence
 timings**, because the highlight sync depends on them.
 
-### Add another LLM
+### How to add another LLM
 
 - **Different Ollama model:** set `OLLAMA_MODEL` (e.g. `qwen3:8b`, `gemma3:4b`, `llama3.2:3b`), run
   `ollama pull` for it, and that's it. The model name is part of the analysis cache key, so only
-  analysis re-runs. Extraction is reused, and TTS is reused wherever the narration didn't change.
+  analysis re-runs. Extraction is reused, and TTS is reused for every chapter whose sentences and
+  chapter numbering didn't change.
 - **Different runtime** (llama.cpp server, LM Studio, MLX, …): implement `LLMProvider`
   (`packages/pipeline/src/llm/provider.ts`). You need `name`, `model`, `isAvailable()` and
   `generateJson(req)`, which must return JSON that satisfies `req.schema`. Use it in
@@ -821,7 +836,7 @@ timings**, because the highlight sync depends on them.
   settings to `packages/config`. `LLMHelper` keeps doing the caching, concurrency limits and the
   rewrite guard.
 
-### Add a video style
+### How to add another video style
 
 1. **Camera math** (`workers/processing/audiobook_worker/video/layout.py`): decide the base scale in
    `base_scale()` and, if the style moves, the camera path (see `build_camera_path()` for how `follow`
@@ -910,8 +925,8 @@ microservices.
 
 Also deliberately limited in V1:
 
-- Highlighting is sentence- or paragraph-level, not word-by-word. Estimated word timings exist in the
-  TTS layer but are not rendered.
+- Highlighting is sentence- or paragraph-level, not word-by-word. The TTS layer can estimate word
+  timings, but the pipeline does not use them yet.
 - English is the tuned language; Bangla is on the [roadmap](#bangla-roadmap).
 - 9:16 and 1:1 work, but the layout is tuned for 16:9.
 - Encrypted PDFs are supported through the CLI only.

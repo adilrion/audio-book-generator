@@ -13,7 +13,6 @@ import {
 } from '@app/types';
 import { Captions, Film, Headphones, Info, LoaderCircle, Mic, Palette, ScanText, Sparkles, TriangleAlert } from 'lucide-react';
 import { type ReactNode, useEffect, useId } from 'react';
-import { splitHint } from '@/components/api-error-alert';
 import { CommandSnippet } from '@/components/copy-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +27,7 @@ import { useApi } from '@/hooks/use-api';
 import { api, type SystemConfig } from '@/lib/api';
 import { highlightStyleCss } from '@/lib/highlight';
 import { cloneSettings } from '@/lib/settings';
+import { splitHint } from '@/lib/hint';
 import { cn } from '@/lib/utils';
 import { ENGINE_LABELS, groupVoices, pickVoice, voiceMeta } from '@/lib/voices';
 
@@ -277,7 +277,7 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
           <TriangleAlert aria-hidden />
           <AlertTitle>{ENGINE_LABELS[engine]?.name ?? engine} is not installed</AlertTitle>
           <AlertDescription>
-            <p>{install?.command ? install.text?.replace(/\s*(Run|run):$/, '') : voices.data?.message}</p>
+            <p>{install?.command ? install.text?.replace(/\s*(?:Run|run|with):$/, '') : voices.data?.message}</p>
             {install?.command && <CommandSnippet command={install.command} className="mt-1 w-full" />}
             <p>Install it, then reopen this list — or pick another engine.</p>
           </AlertDescription>
@@ -364,12 +364,13 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
             aria-label="Narration speed"
             disabled={disabled}
           />
-          <div className="flex justify-between text-[11px] text-muted-foreground">
-            <span>0.5× slower</span>
-            <button type="button" className="hover:text-foreground" onClick={() => update((d) => void (d.tts.speed = 1))}>
+          <div className="relative h-4 text-[11px] text-muted-foreground">
+            <span className="absolute left-0">0.5× slower</span>
+            {/* 1.0× sits at (1 - 0.5) / (2 - 0.5) = 1/3 of the track */}
+            <button type="button" className="absolute left-1/3 -translate-x-1/2 hover:text-foreground" onClick={() => update((d) => void (d.tts.speed = 1))}>
               1.0× normal
             </button>
-            <span>2.0× faster</span>
+            <span className="absolute right-0">2.0× faster</span>
           </div>
         </Field>
       </Section>

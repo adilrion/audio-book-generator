@@ -61,19 +61,16 @@ export function OutputsList({ outputs, pending }: { outputs: OutputFile[]; pendi
             <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
               <Icon className="size-4" aria-hidden />
             </span>
-            <div className="grid min-w-0 flex-1 gap-0.5">
-              <p className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate font-mono text-[13px] font-medium">{f.name}</span>
-                <span className="shrink-0 text-xs text-muted-foreground tabular">{formatBytes(f.size)}</span>
-              </p>
+            <div className="grid min-w-0 flex-1 gap-0.5" title={meta.description}>
+              <p className="truncate font-mono text-[13px] font-medium">{f.name}</p>
               <p className="truncate text-xs text-muted-foreground">
-                {meta.label} — {meta.description}
+                <span className="tabular">{formatBytes(f.size)}</span> · {meta.label}
               </p>
             </div>
             {f.name === 'chapters.txt' && <CopyChapters url={`${apiUrl(f.url)}?inline=1`} />}
-            <Button asChild variant="outline" size="sm">
-              <a href={apiUrl(f.url)} download={f.name}>
-                <Download aria-hidden /> <span className="hidden sm:inline">Download</span>
+            <Button asChild variant="outline" size="icon-sm">
+              <a href={apiUrl(f.url)} download={f.name} aria-label={`Download ${f.name}`} title={`Download ${f.name}`}>
+                <Download aria-hidden />
               </a>
             </Button>
           </li>

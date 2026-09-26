@@ -176,25 +176,33 @@ describe.skipIf(!canRun)('API integration (live server)', () => {
       expect(typeof start.body.jobId).toBe('string');
       jobIds.push(start.body.jobId);
 
-      const again = await call<ErrorBody>('POST', `/projects/${project.id}/process`);
-      expect(again.status).toBe(409);
-      expect(again.body.error.code).toBe('CONFLICT');
-
       const deadline = Date.now() + PROCESS_TIMEOUT_MS;
       let last: ProgressSnapshot | undefined;
-      const seen = new Set<string>();
+      let conflictChecked = false;
       while (Date.now() < deadline) {
         const st = await call<ProgressSnapshot>('GET', `/projects/${project.id}/status`);
         expect(st.status).toBe(200);
         last = st.body;
-        seen.add(last.status);
         expect(last.progress).toBeGreaterThanOrEqual(0);
         expect(last.progress).toBeLessThanOrEqual(100);
         if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(last.status)) break;
-        await sleep(1000);
+        if (!conflictChecked && ACTIVE.includes(last.status)) {
+          // While running, a second start and settings changes are refused.
+          // (The instant double-click case is covered by the ProjectsService.process unit tests.)
+          conflictChecked = true;
+          const again = await call<ErrorBody & { jobId?: string }>('POST', `/projects/${project.id}/process`);
+          if (again.body.jobId) jobIds.push(again.body.jobId);
+          expect(again.status).toBe(409);
+          expect(again.body.error).toMatchObject({ code: 'CONFLICT', message: 'This project is already processing.' });
+          const patch = await call<ErrorBody>('PATCH', `/projects/${project.id}/settings`, json({ tts: { speed: 1.2 } }));
+          expect(patch.status).toBe(409);
+          expect(patch.body.error.code).toBe('CONFLICT');
+        }
+        await sleep(conflictChecked ? 1000 : 100);
       }
       expect(last?.error, `processing failed: ${JSON.stringify(last?.error)}`).toBeUndefined();
       expect(last?.status).toBe('COMPLETED');
+      expect(conflictChecked, 'never observed the project in a running state').toBe(true);
       expect(last?.progress).toBe(100);
 
       const steps = await call<StepRecord[]>('GET', `/projects/${project.id}/steps`);

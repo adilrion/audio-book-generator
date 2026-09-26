@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
-import type { Prisma, Project, Document } from '@prisma/client';
+import { Prisma, type Document, type JobStatus, type Project } from '@prisma/client';
 import { CachePaths, cleanProjectCache, deleteProjectFiles, type OutputRecord } from '@app/pipeline';
 import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
 import {
@@ -24,7 +24,7 @@ import { QueueService } from '../queue/queue.service';
 import { PythonService } from '../system/python.service';
 import { settingsSchema } from './settings.schema';
 
-const ACTIVE = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
+const ACTIVE: JobStatus[] = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
 type ProjectWithDoc = Project & { document: Document };
 
 @Injectable()
@@ -265,31 +265,45 @@ export class ProjectsService {
   /** Start / resume / retry. Finished steps are reused from cache automatically. */
   async process(id: string, force = false): Promise<{ jobId: string }> {
     const p = await this.get(id);
-    if (ACTIVE.includes(p.status)) throw conflict('This project is already processing.');
-    const pending = await this.prisma.renderJob.findFirst({ where: { projectId: id, status: 'PENDING' } });
-    if (pending) throw conflict('This project is already queued.');
     if (!fs.existsSync(p.document.filePath)) throw new AppError('PDF_MISSING', 'The uploaded PDF file is missing from storage. Please upload it again.', { retryable: false });
-    if (force) {
-      await this.prisma.processingStep.deleteMany({ where: { projectId: id } });
-      await rmOutputsKeepNothing(this.paths.output(id));
-    }
-    const rj = await this.prisma.renderJob.create({ data: { projectId: id, force } });
-    try {
-      const jobId = await this.queue.enqueue({ projectId: id, renderJobId: rj.id, force });
-      await this.prisma.renderJob.update({ where: { id: rj.id }, data: { queueJobId: jobId } });
-      await this.prisma.project.update({
+    // Check-and-queue under a row lock: a double click must not start two runs, and the worker may
+    // already have taken the job (render job EXTRACTING) while the project row still says PENDING.
+    const rj = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${id} FOR UPDATE`;
+      const cur = await tx.project.findUnique({ where: { id }, select: { status: true, progress: true } });
+      if (!cur) throw notFound('Project');
+      if (ACTIVE.includes(cur.status)) throw conflict('This project is already processing.');
+      const open = await tx.renderJob.findFirst({ where: { projectId: id, status: { in: ['PENDING', ...ACTIVE] } } });
+      if (open) throw conflict(open.status === 'PENDING' ? 'This project is already queued.' : 'This project is already processing.');
+      const job = await tx.renderJob.create({ data: { projectId: id, force } });
+      // Written before the job is visible to the worker, so it can never overwrite the worker's progress.
+      await tx.project.update({
         where: { id },
         data: {
           status: 'PENDING',
           cancelRequested: false,
-          snapshot: { status: 'PENDING', progress: p.progress, message: 'Waiting for the worker…', updatedAt: new Date().toISOString() } as Prisma.InputJsonValue,
+          snapshot: { status: 'PENDING', progress: cur.progress, message: 'Waiting for the worker…', updatedAt: new Date().toISOString() } as Prisma.InputJsonValue,
         },
       });
-      return { jobId };
+      return job;
+    });
+    let jobId: string;
+    try {
+      if (force) {
+        await this.prisma.processingStep.deleteMany({ where: { projectId: id } });
+        await rmOutputsKeepNothing(this.paths.output(id));
+      }
+      jobId = await this.queue.enqueue({ projectId: id, renderJobId: rj.id, force });
     } catch (e) {
+      // Nothing was queued: drop the render job and restore the previous state (e.g. FAILED and its error).
       await this.prisma.renderJob.delete({ where: { id: rj.id } }).catch(() => undefined);
+      await this.prisma.project
+        .update({ where: { id }, data: { status: p.status, snapshot: p.snapshot === null ? Prisma.DbNull : (p.snapshot as Prisma.InputJsonValue) } })
+        .catch(() => undefined);
       throw e;
     }
+    await this.prisma.renderJob.update({ where: { id: rj.id }, data: { queueJobId: jobId } }).catch(() => undefined);
+    return { jobId };
   }
 
   async cancel(id: string) {

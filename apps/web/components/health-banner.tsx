@@ -3,20 +3,22 @@
 import type { HealthCheck } from '@app/types';
 import { ChevronRight, CircleCheck, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
-import { ApiErrorAlert, splitHint } from '@/components/api-error-alert';
+import { ApiErrorAlert } from '@/components/api-error-alert';
 import { CommandSnippet } from '@/components/copy-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useApi } from '@/hooks/use-api';
 import { api } from '@/lib/api';
+import { splitHint } from '@/lib/hint';
 import { cn } from '@/lib/utils';
 
 function CheckRow({ check }: { check: HealthCheck }) {
-  // Some checks put the install command in `message` ("… Run: pip install x"); split it out.
+  // The command may be in `fix` (bare or inside a sentence) or at the end of `message` ("… Run: pip install x").
+  const fromFix = splitHint(check.fix);
   const fromMessage = splitHint(check.message);
-  const command = check.fix ?? fromMessage.command;
-  const text = check.fix ? check.message : (fromMessage.command ? fromMessage.text?.replace(/\s*(Run|run):$/, '') : check.message);
+  const command = fromFix.command ?? fromMessage.command;
+  const text = fromMessage.command ? fromMessage.text?.replace(/\s*(?:Run|run|with):$/, '') : check.message;
   return (
     <li className="grid gap-1.5">
       <p className="text-foreground">
@@ -82,10 +84,10 @@ export function HealthBanner({ className, hideWhenHealthy = false }: { className
         <Alert variant="warning">
           <TriangleAlert aria-hidden />
           <AlertTitle>
-            <button type="button" className="flex items-center gap-1 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+            <button type="button" className="text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
               {optional.length === 1 ? '1 optional component is unavailable' : `${optional.length} optional components are unavailable`}
-              <span className="font-normal text-muted-foreground">: {optional.map((c) => c.name).join(', ')}</span>
-              <ChevronRight className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} aria-hidden />
+              <span className="font-normal text-muted-foreground">{`: ${optional.map((c) => c.name).join(', ')}`}</span>
+              <ChevronRight className={cn('ml-1 inline size-4 align-[-3px] text-muted-foreground transition-transform', open && 'rotate-90')} aria-hidden />
             </button>
           </AlertTitle>
           {open && (

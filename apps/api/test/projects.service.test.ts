@@ -6,6 +6,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '@app/config';
 import { WorkerCallError } from '@app/pipeline';
 import { AppError } from '@app/shared';
+import { redisUnavailable } from '../src/common/errors';
 import type { PdfInspection } from '@app/types';
 import type { PrismaService } from '../src/prisma/prisma.service';
 import { ProjectsService } from '../src/projects/projects.service';
@@ -175,5 +176,184 @@ describe('ProjectsService.create', () => {
     const { file, hash } = upload();
     await expect(t.svc.create(file, JSON.stringify({ language: 'bn' }))).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('Bangla') });
     expect(stored(hash)).toBe(false);
+  });
+});
+
+// ── process(): start / resume ─────────────────────────────────────────────
+
+interface FakeRenderJob {
+  id: string;
+  projectId: string;
+  status: string;
+  force: boolean;
+  queueJobId?: string;
+}
+
+/**
+ * In-memory project + RenderJob table. `$transaction(fn)` runs callbacks one at a time, like the
+ * row lock (SELECT … FOR UPDATE) serializes them in Postgres.
+ */
+function processSetup(project: { status: string; snapshot?: unknown } = { status: 'PENDING' }) {
+  const pdf = path.join(tmp, `doc-${crypto.randomUUID()}.pdf`);
+  fs.writeFileSync(pdf, '%PDF-1.7\n');
+  const row = { id: 'proj-1', name: 'P', status: project.status, progress: 0, snapshot: project.snapshot ?? null, cancelRequested: false, updatedAt: new Date(), createdAt: new Date(), document: { filePath: pdf, hash: 'h' } };
+  const jobs: FakeRenderJob[] = [];
+  const log: string[] = [];
+  let seq = 0;
+  let tail: Promise<unknown> = Promise.resolve();
+  const matches = (j: FakeRenderJob, where: { projectId: string; status?: string | { in: string[] } }) =>
+    j.projectId === where.projectId && (where.status === undefined || (typeof where.status === 'string' ? j.status === where.status : where.status.in.includes(j.status)));
+  const tick = () => new Promise((r) => setImmediate(r)); // let concurrent requests interleave
+  const prisma = {
+    project: {
+      async findUnique() {
+        await tick();
+        return { ...row };
+      },
+      async update({ data }: { data: Record<string, unknown> }) {
+        await tick();
+        log.push(`project.update:${String(data.status ?? '-')}`);
+        Object.assign(row, data);
+        return { ...row };
+      },
+    },
+    renderJob: {
+      async findFirst({ where }: { where: { projectId: string; status?: string | { in: string[] } } }) {
+        await tick();
+        return jobs.find((j) => matches(j, where)) ?? null;
+      },
+      async create({ data }: { data: { projectId: string; force: boolean } }) {
+        await tick();
+        const j = { id: `rj-${++seq}`, status: 'PENDING', ...data };
+        jobs.push(j);
+        log.push('renderJob.create');
+        return j;
+      },
+      async update({ where, data }: { where: { id: string }; data: Partial<FakeRenderJob> }) {
+        Object.assign(jobs.find((j) => j.id === where.id)!, data);
+      },
+      async delete({ where }: { where: { id: string } }) {
+        jobs.splice(
+          jobs.findIndex((j) => j.id === where.id),
+          1,
+        );
+        log.push('renderJob.delete');
+      },
+    },
+    processingStep: {
+      async deleteMany() {
+        log.push('processingStep.deleteMany');
+      },
+    },
+    async $queryRaw(strings: TemplateStringsArray) {
+      log.push(`sql:${strings.join('?').trim()}`);
+      return [];
+    },
+    async $transaction(fn: (tx: unknown) => Promise<unknown>) {
+      const run = tail.then(() => fn(prisma));
+      tail = run.catch(() => undefined);
+      return run;
+    },
+  };
+  const queue = {
+    enqueued: [] as { renderJobId: string }[],
+    onEnqueue: undefined as undefined | (() => void | Promise<void>),
+    async enqueue(data: { renderJobId: string }) {
+      log.push('queue.enqueue');
+      await queue.onEnqueue?.();
+      queue.enqueued.push(data);
+      return data.renderJobId;
+    },
+  };
+  const svc = new ProjectsService(cfg, prisma as unknown as PrismaService, queue as unknown as QueueService, {} as PythonService);
+  return { svc, row, jobs, queue, log };
+}
+
+describe('ProjectsService.process', () => {
+  it('queues a render job and marks the project PENDING before the worker can see the job', async () => {
+    const t = processSetup({ status: 'FAILED' });
+    const { jobId } = await t.svc.process('proj-1');
+    expect(jobId).toBe('rj-1');
+    expect(t.jobs).toEqual([{ id: 'rj-1', projectId: 'proj-1', status: 'PENDING', force: false, queueJobId: 'rj-1' }]);
+    expect(t.row).toMatchObject({ status: 'PENDING', cancelRequested: false, snapshot: { status: 'PENDING', message: 'Waiting for the worker…' } });
+    expect(t.log.indexOf('project.update:PENDING')).toBeLessThan(t.log.indexOf('queue.enqueue'));
+  });
+
+  it('refuses a second start while the job is still queued', async () => {
+    const t = processSetup();
+    await t.svc.process('proj-1');
+    await expect(t.svc.process('proj-1')).rejects.toMatchObject({ code: 'CONFLICT', message: 'This project is already queued.' });
+    expect(t.queue.enqueued).toHaveLength(1);
+  });
+
+  it('refuses a second start after the worker picked the job up but before the project status changed', async () => {
+    const t = processSetup();
+    await t.svc.process('proj-1');
+    t.jobs[0].status = 'EXTRACTING'; // worker took the job; runner has not written its first snapshot yet
+    expect(t.row.status).toBe('PENDING');
+    await expect(t.svc.process('proj-1')).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(t.svc.process('proj-1', true)).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(t.queue.enqueued).toHaveLength(1);
+    expect(t.log).not.toContain('processingStep.deleteMany'); // a refused restart must not wipe progress
+  });
+
+  it('lets exactly one of two simultaneous starts (double click) through', async () => {
+    const t = processSetup();
+    const results = await Promise.allSettled([t.svc.process('proj-1'), t.svc.process('proj-1')]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: 'CONFLICT' });
+    expect(t.queue.enqueued).toHaveLength(1);
+    expect(t.jobs).toHaveLength(1);
+    expect(t.log.some((l) => /FOR UPDATE/.test(l))).toBe(true);
+  });
+
+  it('does not overwrite a status the worker already wrote', async () => {
+    const t = processSetup();
+    t.queue.onEnqueue = () => {
+      // a fast worker: picks the job up and reports progress before enqueue() even returns
+      t.jobs[0].status = 'EXTRACTING';
+      Object.assign(t.row, { status: 'EXTRACTING', snapshot: { status: 'EXTRACTING', progress: 1 } });
+    };
+    await t.svc.process('proj-1');
+    expect(t.row.status).toBe('EXTRACTING');
+    expect(t.row.snapshot).toEqual({ status: 'EXTRACTING', progress: 1 });
+  });
+
+  it('allows a new run once the previous one finished', async () => {
+    const t = processSetup({ status: 'COMPLETED' });
+    await t.svc.process('proj-1');
+    t.jobs[0].status = 'COMPLETED';
+    t.row.status = 'COMPLETED';
+    await expect(t.svc.process('proj-1', true)).resolves.toEqual({ jobId: 'rj-2' });
+    expect(t.log).toContain('processingStep.deleteMany');
+  });
+
+  it('refuses while the project is processing', async () => {
+    const t = processSetup({ status: 'GENERATING_AUDIO' });
+    await expect(t.svc.process('proj-1')).rejects.toMatchObject({ code: 'CONFLICT', message: 'This project is already processing.' });
+    expect(t.jobs).toHaveLength(0);
+  });
+
+  it('rolls back when Redis is down: no render job left, previous status and error kept', async () => {
+    const snapshot = { status: 'FAILED', progress: 40, error: { code: 'TTS_FAILED', message: 'Speech generation failed.', retryable: true } };
+    const t = processSetup({ status: 'FAILED', snapshot });
+    t.queue.onEnqueue = () => {
+      throw redisUnavailable();
+    };
+    await expect(t.svc.process('proj-1')).rejects.toMatchObject({ code: 'REDIS_UNAVAILABLE' });
+    expect(t.jobs).toHaveLength(0);
+    expect(t.row.status).toBe('FAILED');
+    expect(t.row.snapshot).toEqual(snapshot);
+    // and it can be started again once Redis is back
+    t.queue.onEnqueue = undefined;
+    await expect(t.svc.process('proj-1')).resolves.toEqual({ jobId: 'rj-2' });
+  });
+
+  it('reports a PDF missing from storage', async () => {
+    const t = processSetup();
+    fs.rmSync(t.row.document.filePath);
+    await expect(t.svc.process('proj-1')).rejects.toMatchObject({ code: 'PDF_MISSING' });
+    expect(t.jobs).toHaveLength(0);
   });
 });

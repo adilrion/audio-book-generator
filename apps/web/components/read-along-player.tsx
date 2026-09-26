@@ -219,7 +219,8 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
     }
   };
 
-  const displayWidth = `min(100%, calc(72vh * ${pw} / ${ph}))`;
+  // Fit the page so page + transport fit on one screen (min 320px tall on small viewports).
+  const displayWidth = `min(100%, calc(max(320px, 100dvh - 360px) * ${pw} / ${ph}))`;
 
   return (
     <div className="grid gap-4 outline-none" onKeyDown={onPlayerKey}>
