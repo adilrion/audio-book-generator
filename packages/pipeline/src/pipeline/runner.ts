@@ -221,6 +221,13 @@ export class PipelineRunner {
     const manifestFile = path.join(outDir, 'manifest.json');
     const manifest: ProjectManifest = (await readJsonIfExists<ProjectManifest>(manifestFile)) ?? { pdfHash: job.pdfHash, audioKeys: [], videoKeys: [] };
     const saveManifest = () => atomicWriteJson(manifestFile, manifest, true);
+    /** Drop a key before its output file is rewritten, so a crash/failure mid-way can't leave
+     *  a stale key vouching for a file produced with other settings. */
+    const invalidate = async (k: 'masterKey' | 'timelineKey') => {
+      if (manifest[k] === undefined) return;
+      manifest[k] = undefined;
+      await saveManifest();
+    };
 
     const mainPool = this.pool(1);
     try {
@@ -256,7 +263,7 @@ export class PipelineRunner {
 
       // ── 2+3. CLEAN + ANALYZE ────────────────────────────────
       const llm = await this.makeLlm(s);
-      const analysisKey = hashKey(ANALYZER_VERSION, extractKey, s.language, s.text.skipFrontMatter, llm ? llm.model : 'none', !!(llm && this.cfg.LLM_PRONUNCIATION));
+      const analysisKey = hashKey(ANALYZER_VERSION, extractKey, s.language, s.text.skipFrontMatter, llm ? llm.model : 'none', !!(llm && this.cfg.LLM_PRONUNCIATION), job.title);
       const analysisFile = this.paths.analysis(job.pdfHash, analysisKey);
       let analysis: Analysis;
       if (await this.hit(analysisFile)) {
@@ -329,9 +336,10 @@ export class PipelineRunner {
           return mark;
         });
       })();
-      const masterKey = hashKey(manifest.audioKeys, s.audio.normalize, this.cfg.AUDIO_BITRATE, this.cfg.AUDIO_ENCODER, chapterMarks.map((c) => c.title));
+      const masterKey = hashKey(manifest.audioKeys, s.audio.normalize, this.cfg.AUDIO_BITRATE, this.cfg.AUDIO_ENCODER, chapterMarks.map((c) => c.title), analysis.title);
       await this.step('AUDIO_MERGE', 'AUDIO_MERGE', async (report) => {
         if (!this.force && manifest.masterKey === masterKey && (await exists(m4a))) return { value: null, cached: true };
+        await invalidate('masterKey'); // the file is replaced below; never let an old key vouch for it
         await masterAudio(this.cfg, audios.map((a) => a.file), m4a, {
           normalize: s.audio.normalize,
           title: analysis.title,
@@ -358,6 +366,7 @@ export class PipelineRunner {
       const timeline = await this.step('TIMELINE', 'TIMELINE', async () => {
         if (!this.force && manifest.timelineKey === timelineKey && (await exists(timelineFile)) && (await exists(path.join(outDir, 'subtitles.srt'))))
           return { value: await readJson<Timeline>(timelineFile), cached: true };
+        await invalidate('timelineKey');
         const t = buildTimeline(analysis, audios, { fps: s.video.fps, highlightMode: s.video.highlightMode, pageSizes });
         await atomicWriteJson(path.join(outDir, 'timeline.json'), t);
         await atomicWrite(path.join(outDir, 'subtitles.srt'), toSrt(buildCues(analysis, audios)));
@@ -374,17 +383,28 @@ export class PipelineRunner {
         const plans = this.planVideo(job, timeline, audios, pageSizes);
         const mp4 = path.join(outDir, 'audiobook.mp4');
         const muxKey = hashKey(plans.map((p) => p.key), masterKey, s.video.embedSubtitles, s.language);
+        const videoKeys = plans.map((p) => p.key);
         const finalIsCurrent = !this.force && manifest.muxKey === muxKey && (await exists(mp4));
-        if (finalIsCurrent) {
+        // Only audio/subtitle/metadata inputs changed but the rendered segments were already
+        // cleaned up: the current MP4 already holds exactly this picture — re-mux from it.
+        let reuseFinalVideo = false;
+        if (!finalIsCurrent && !this.force && sameKeys(manifest.finalVideoKeys, videoKeys) && (await exists(mp4))) {
+          for (const p of plans) if (!(await exists(p.file))) reuseFinalVideo = true;
+        }
+        if (finalIsCurrent || reuseFinalVideo) {
           for (const p of plans) await this.step(`VIDEO_CHAPTER_${p.tc.index + 1}`, 'VIDEO', async () => ({ value: null, cached: true }), p.tc.index);
+        }
+        if (finalIsCurrent) {
           await this.step('MUX', 'MUX', async () => ({ value: null, cached: true }));
         } else {
-          const segs = await this.renderVideo(job, plans, timeline);
-          manifest.videoKeys = segs.map((v) => v.key);
+          const segs = reuseFinalVideo ? [] : await this.renderVideo(job, plans, timeline);
+          if (!reuseFinalVideo) manifest.videoKeys = segs.map((v) => v.key);
+          manifest.muxKey = undefined;
+          if (!sameKeys(manifest.finalVideoKeys, videoKeys)) manifest.finalVideoKeys = undefined;
           await saveManifest();
           await this.step('MUX', 'MUX', async () => {
             this.setStage('MUX', 0.2, 'Combining video, audio and subtitles');
-            await muxFinal(this.cfg, segs.map((v) => v.file), m4a, mp4, {
+            await muxFinal(this.cfg, reuseFinalVideo ? [mp4] : segs.map((v) => v.file), m4a, mp4, {
               srt: s.video.embedSubtitles ? path.join(outDir, 'subtitles.srt') : undefined,
               title: analysis.title,
               chapters: chapterMarks,
@@ -395,6 +415,7 @@ export class PipelineRunner {
             this.setStage('MUX', 0.8, 'Validating output');
             const v = await validateOutput(this.cfg, mp4, totalDuration, s.video.fps);
             manifest.muxKey = muxKey;
+            manifest.finalVideoKeys = videoKeys;
             await saveManifest();
             return { value: null, cached: false, message: `A/V drift ${(v.drift * 1000).toFixed(0)} ms` };
           });
@@ -592,7 +613,7 @@ export class PipelineRunner {
         showChapterTitle: v.showChapterTitle,
       };
       const encoder = { codec: this.cfg.VIDEO_ENCODER, bitrate: this.cfg.VIDEO_BITRATE, crf: this.cfg.VIDEO_CRF, ffmpeg: this.cfg.FFMPEG_BIN };
-      const key = hashKey(RENDER_VERSION, audios[i].cacheKey, v.width, v.height, fps, style, encoder, segments, tc.title, frameStart, frameEnd, v.showProgress ? timeline.duration : 0);
+      const key = hashKey(RENDER_VERSION, job.pdfHash, audios[i].cacheKey, v.width, v.height, fps, style, encoder, segments, tc.title, frameStart, frameEnd, v.showProgress ? timeline.duration : 0);
       const pages: Record<string, { w: number; h: number }> = {};
       for (const sg of segments) {
         const wh = pageSizes[String(sg.page)] ?? [612, 792];
@@ -693,6 +714,10 @@ export class PipelineRunner {
     }
     return out;
   }
+}
+
+function sameKeys(a: string[] | undefined, b: string[]): boolean {
+  return !!a && a.length === b.length && a.every((k, i) => k === b[i]);
 }
 
 function parseBitrate(b: string): number {

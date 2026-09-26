@@ -129,6 +129,8 @@ model Sentence {
   regions     Json
 
   @@index([key])
+  /// FK index: without it every cascaded paragraph delete (re-analysis, project delete) scans the whole table.
+  @@index([paragraphId])
 }
 
 /// One synthesized chapter (FLAC in storage/audio, content-addressed by cacheKey).

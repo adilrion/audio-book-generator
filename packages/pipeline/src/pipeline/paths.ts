@@ -53,5 +53,8 @@ export interface ProjectManifest {
   masterKey?: string;
   timelineKey?: string;
   muxKey?: string;
+  /** Video segment keys the current audiobook.mp4 was muxed from (lets a re-mux reuse its
+   *  picture after the segments were cleaned up). */
+  finalVideoKeys?: string[];
   durationSec?: number;
 }

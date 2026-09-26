@@ -60,6 +60,7 @@ export class PythonProcess {
   start(): Promise<void> {
     if (this.ready && this.alive) return this.ready;
     this.exited = false;
+    this.stderrTail = [];
     this.ready = new Promise<void>((resolve, reject) => {
       const proc = spawn(this.cfg.PYTHON_BIN, ['-u', '-m', 'audiobook_worker.server'], {
         cwd: this.cfg.repoRoot,
@@ -77,23 +78,32 @@ export class PythonProcess {
       });
       this.proc = proc;
       let started = false;
+      // Events from a process we already killed and replaced must not touch the new one.
+      const current = () => this.proc === proc;
       proc.on('error', (err) => {
-        this.exited = true;
         const e = new AppError('PYTHON_MISSING', 'The Python processing worker could not be started.', {
           hint: 'Run: pnpm setup:python',
           cause: err,
         });
         if (!started) reject(e);
+        if (!current()) return;
+        this.exited = true;
         this.failAll(e);
       });
+      // A write to a dead worker fails with EPIPE; without a listener that crashes Node.
+      proc.stdin.on('error', (err) => {
+        this.log.warn(`python worker stdin: ${err.message}`);
+        if (current()) this.kill(new AppError('WORKER_CRASHED', 'The processing worker stopped unexpectedly.', { cause: err, retryable: true }));
+      });
       proc.on('exit', (code, sig) => {
-        this.exited = true;
         const tail = this.stderrTail.join('\n');
         const e = new AppError('WORKER_CRASHED', 'The processing worker stopped unexpectedly.', {
           details: { code, sig, stderr: tail.slice(-3000) },
           retryable: true,
         });
         if (!started) reject(e);
+        if (!current()) return;
+        this.exited = true;
         this.failAll(e);
       });
       readline.createInterface({ input: proc.stderr }).on('line', (line) => {
@@ -146,19 +156,18 @@ export class PythonProcess {
   async call<T>(method: string, params: unknown, opts: CallOptions = {}): Promise<T> {
     if (opts.signal?.aborted) throw new CancelledError();
     await this.start();
+    if (opts.signal?.aborted) throw new CancelledError(); // aborted while the worker was starting
     const id = ++this.seq;
     return new Promise<T>((resolve, reject) => {
       const pending: Pending = { resolve: resolve as (v: unknown) => void, reject, opts };
       if (opts.timeoutMs) {
         pending.timer = setTimeout(() => {
-          this.kill();
-          reject(new AppError('WORKER_TIMEOUT', `Processing step "${method}" took too long and was stopped.`, { retryable: true }));
+          this.kill(new AppError('WORKER_TIMEOUT', `Processing step "${method}" took too long and was stopped.`, { retryable: true }));
         }, opts.timeoutMs);
       }
       if (opts.signal) {
         const onAbort = () => {
-          this.kill(); // the only reliable way to stop a CPU-bound Python call
-          reject(new CancelledError());
+          this.kill(new CancelledError()); // the only reliable way to stop a CPU-bound Python call
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
         const done = (fn: (v: any) => void) => (v: any) => {
@@ -173,11 +182,14 @@ export class PythonProcess {
     });
   }
 
-  kill(): void {
+  /** SIGKILL the worker and reject its in-flight calls with `reason` right away (the
+   *  'exit' event of a replaced process is ignored, so nothing else would settle them). */
+  kill(reason: unknown = new CancelledError()): void {
     if (this.proc && !this.exited) {
       this.proc.kill('SIGKILL');
       this.exited = true;
     }
+    this.failAll(reason);
   }
 
   async stop(): Promise<void> {
