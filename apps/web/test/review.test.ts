@@ -190,3 +190,18 @@ describe('voice language labels', () => {
     expect(g.map((x) => x.label)).toEqual(['English', 'German', 'Slovenian', 'Tamil']);
   });
 });
+
+describe('settings sent with the upload', () => {
+  it('never lets a half-edited form (e.g. an emptied chapter field) reject the PDF upload', async () => {
+    const { settingsForUpload, validateSettings } = await import('@/lib/settings');
+    const s = cloneSettings(DEFAULT_SETTINGS);
+    s.text.ocr = 'off';
+    s.text.chapterRange = { from: 0, to: 2 }; // what the form holds right after clearing the "from" input
+    expect(validateSettings(s)).toMatch(/whole numbers starting at 1/);
+    // Only what POST /projects itself checks (scanned PDF + OCR off) goes with the upload; the rest is PATCHed at Start.
+    expect(settingsForUpload(s)).toEqual({ text: { ocr: 'off' } });
+    const ok = cloneSettings(DEFAULT_SETTINGS);
+    ok.tts.voice = 'bm_george';
+    expect(settingsForUpload(ok)).toEqual(ok);
+  });
+});

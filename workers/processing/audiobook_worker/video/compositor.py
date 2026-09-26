@@ -267,6 +267,19 @@ class ChapterCompositor:
         self._last_key, self._last_frame = key, out
         return out
 
+    # ── geometry (tests / diagnostics) ──────────────────────
+    def frame_rects(self, t: float, rects) -> tuple[int, list[tuple[float, float, float, float]]]:
+        """Page-space rects → frame pixel rects for the page on screen at time t: (page, rects)."""
+        page, cy, s, _ = self._run_state(self._run_index(t), t)
+        cx = self.pages[page].w / 2
+        return page, [(self.W / 2 + (r[0] - cx) * s, self.H / 2 + (r[1] - cy) * s,
+                       self.W / 2 + (r[2] - cx) * s, self.H / 2 + (r[3] - cy) * s) for r in rects]
+
+    def render_plain(self, t: float) -> np.ndarray:
+        """The page as framed at time t, without highlights, cross-fade or overlays."""
+        page, cy, s, _ = self._run_state(self._run_index(t), t)
+        return self._render_run((page, cy, s, ()))
+
     def _title_alpha(self, t: float) -> float:
         if self._title_img is None:
             return 0.0

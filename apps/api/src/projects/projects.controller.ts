@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Logger, type OnModuleDestroy, type OnModuleInit, Param, ParseIntPipe, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { diskStorage } from 'multer';
 import { loadConfig } from '@app/config';
 import { notFound } from '../common/errors';
+import { sweepIncoming } from './incoming';
 import { ProjectsService } from './projects.service';
 
 const cfg = loadConfig();
@@ -13,8 +14,25 @@ const tmpDir = path.join(cfg.storage.uploads, '.incoming');
 fs.mkdirSync(tmpDir, { recursive: true });
 
 @Controller('projects')
-export class ProjectsController {
+export class ProjectsController implements OnModuleInit, OnModuleDestroy {
+  private sweeper?: NodeJS.Timeout;
+
   constructor(private readonly projects: ProjectsService) {}
+
+  /** Clean partial uploads a previous crash left behind, at start-up and hourly. */
+  onModuleInit() {
+    const sweep = () =>
+      void sweepIncoming(tmpDir).then((removed) => {
+        if (removed.length) new Logger('Uploads').warn(`Removed ${removed.length} abandoned partial upload(s) from ${tmpDir}`);
+      });
+    sweep();
+    this.sweeper = setInterval(sweep, 60 * 60_000);
+    this.sweeper.unref();
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.sweeper);
+  }
 
   /** Multipart upload streamed straight to disk (never buffered in memory). */
   @Post()
@@ -22,6 +40,8 @@ export class ProjectsController {
     FileInterceptor('file', {
       storage: diskStorage({ destination: tmpDir, filename: (_r, _f, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`) }),
       limits: { fileSize: cfg.MAX_UPLOAD_MB * 1024 * 1024, files: 1 },
+      // Browsers send the file name as raw UTF-8; multer's default (latin1) turns "বই.pdf" into mojibake.
+      defParamCharset: 'utf8',
     }),
   )
   create(@UploadedFile() file: Express.Multer.File, @Body('settings') settings?: string, @Body('name') name?: string) {

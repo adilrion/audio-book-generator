@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkerCallError } from '@app/pipeline';
 import { AppError } from '@app/shared';
+import { loadConfig } from '@app/config';
 import { UserErrorFilter } from '../src/common/error.filter';
 import { badRequest, conflict, notFound } from '../src/common/errors';
 
@@ -143,13 +144,39 @@ describe('UserErrorFilter', () => {
       expect(typeof sent.body?.error.message).toBe('string');
     });
 
-    it('maps the multer upload-size error to 413', () => {
-      expect(send(new PayloadTooLargeException('File too large'))).toEqual({ status: 413, body: { error: { code: 'HTTP_413', message: 'File too large', retryable: false } } });
+    it('maps the multer upload-size error to 413 and names the upload limit', () => {
+      const mb = loadConfig().MAX_UPLOAD_MB;
+      expect(send(new PayloadTooLargeException('File too large'))).toEqual({
+        status: 413,
+        body: { error: { code: 'FILE_TOO_LARGE', message: `This file is larger than the ${mb} MB upload limit.`, hint: 'Split the PDF or raise MAX_UPLOAD_MB in .env.', retryable: false } },
+      });
     });
 
     it('does not log HttpExceptions as server errors', () => {
       send(new NotFoundException());
       expect(logError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('errors from Express middleware (body-parser / http-errors)', () => {
+    // What body-parser throws for a JSON body over its 100 kB limit (raw-body → http-errors).
+    const tooLarge = () => Object.assign(new Error('request entity too large'), { status: 413, statusCode: 413, expose: true, type: 'entity.too.large', limit: 102400, length: 200017 });
+
+    it('keeps their 4xx status instead of answering 500 "Something went wrong"', () => {
+      expect(send(tooLarge())).toEqual({ status: 413, body: { error: { code: 'HTTP_413', message: 'The request is too large.', retryable: false } } });
+      expect(logError).not.toHaveBeenCalled();
+    });
+
+    it('passes other exposed 4xx messages through', () => {
+      const aborted = Object.assign(new Error('request aborted'), { status: 400, statusCode: 400, expose: true, type: 'request.aborted' });
+      expect(send(aborted)).toEqual({ status: 400, body: { error: { code: 'HTTP_400', message: 'request aborted', retryable: false } } });
+    });
+
+    it('does not trust a status on errors that are not meant to be exposed', () => {
+      const internal = Object.assign(new Error('connect ECONNRESET 10.0.0.5:5432 password=hunter2'), { status: 400, expose: false });
+      const sent = send(internal);
+      expect(sent.status).toBe(500);
+      expect(JSON.stringify(sent.body)).not.toMatch(/hunter2|ECONNRESET/);
     });
   });
 });

@@ -48,6 +48,29 @@ export function diffSettings(base: ProjectSettings, next: ProjectSettings): Sett
 
 export const isEmptyPatch = (p: SettingsPatch) => Object.keys(p).length === 0;
 
+/** Returns a user-facing problem with the settings, or undefined when they can be submitted. */
+export function validateSettings(s: ProjectSettings): string | undefined {
+  const r = s.text.chapterRange;
+  if (r) {
+    if (!Number.isInteger(r.from) || !Number.isInteger(r.to) || r.from < 1 || r.to < 1) return 'Chapter numbers must be whole numbers starting at 1.';
+    if (r.from > r.to) return 'The first chapter must not be after the last chapter.';
+  }
+  if (!s.tts.voice) return 'Choose a voice.';
+  if (s.language === 'bn') return 'Bangla narration is coming soon.';
+  return undefined;
+}
+
+/**
+ * Settings to send with POST /projects. The upload happens as soon as a file is dropped, while
+ * the form may be half-edited; the API rejects invalid settings, which would make the *upload*
+ * fail. So send the whole form only when it is valid — otherwise just the OCR mode, which is the
+ * one setting the upload itself checks (a scanned PDF with OCR off is refused). Everything else is
+ * applied with PATCH /settings when the user presses Start.
+ */
+export function settingsForUpload(s: ProjectSettings): ProjectSettings | SettingsPatch {
+  return validateSettings(s) ? { text: { ocr: s.text.ocr } } : s;
+}
+
 export function cloneSettings(s: ProjectSettings): ProjectSettings {
   return JSON.parse(JSON.stringify(s)) as ProjectSettings;
 }

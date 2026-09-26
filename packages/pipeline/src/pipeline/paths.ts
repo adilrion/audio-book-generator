@@ -53,6 +53,9 @@ export interface ProjectManifest {
   masterKey?: string;
   timelineKey?: string;
   muxKey?: string;
+  /** Every chapter-audio / video-segment key any run of this project planned (including
+   *  failed runs and earlier settings), so "Clean project cache" can find all of them. */
+  cacheKeys?: { audio: string[]; video: string[] };
   /** Video segment keys the current audiobook.mp4 was muxed from (lets a re-mux reuse its
    *  picture after the segments were cleaned up). */
   finalVideoKeys?: string[];

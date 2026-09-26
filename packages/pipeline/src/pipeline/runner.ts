@@ -15,12 +15,14 @@ import {
   readJson,
   readJsonIfExists,
   readJsonLines,
+  removeTempSiblings,
   rmrf,
   toAppError,
   type Logger,
   silentLogger,
 } from '@app/shared';
 import {
+  STAGES,
   STAGE_STATUS,
   STAGE_WEIGHTS,
   type Analysis,
@@ -98,6 +100,10 @@ export class PipelineRunner {
   private force = false;
   private signal?: AbortSignal;
   private pools: PythonPool[] = [];
+  // Store writes land in order: a slow early write must never overwrite a later state.
+  private snapshotWrite?: Promise<void>;
+  private queuedSnapshot?: ProgressSnapshot;
+  private stepWrites = new Map<string, Promise<void>>();
 
   constructor(
     private readonly cfg: AppConfig,
@@ -128,14 +134,40 @@ export class PipelineRunner {
       this.lastFlush = now;
       if (this.flushTimer) clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
-      void this.store.updateSnapshot(this.snapshot).catch((e) => this.log.warn('snapshot write failed', e));
+      void this.persistSnapshot();
     } else if (!this.flushTimer) {
       this.flushTimer = setTimeout(() => {
         this.flushTimer = undefined;
         this.lastFlush = Date.now();
-        void this.store.updateSnapshot(this.snapshot).catch(() => undefined);
+        void this.persistSnapshot();
       }, 700);
     }
+  }
+
+  /** One snapshot write in flight at a time; newer snapshots replace queued ones. Resolves
+   *  once the snapshot current at call time (or a newer one) is written. */
+  private persistSnapshot(): Promise<void> {
+    this.queuedSnapshot = this.snapshot;
+    if (!this.snapshotWrite) {
+      const drain = async () => {
+        while (this.queuedSnapshot) {
+          const snap = this.queuedSnapshot;
+          this.queuedSnapshot = undefined;
+          await this.store.updateSnapshot(snap).catch((e) => this.log.warn('snapshot write failed', e));
+        }
+        this.snapshotWrite = undefined;
+      };
+      this.snapshotWrite = drain();
+    }
+    return this.snapshotWrite;
+  }
+
+  /** Step writes are chained per step, so a throttled progress write can't land after COMPLETED/FAILED. */
+  private writeStep(step: StepRecord): Promise<void> {
+    const copy = { ...step };
+    const next = (this.stepWrites.get(step.key) ?? Promise.resolve()).catch(() => undefined).then(() => this.store.updateStep(copy));
+    this.stepWrites.set(step.key, next);
+    return next;
   }
 
   private setStage(stage: Stage, frac: number, message?: string, extra: Partial<ProgressSnapshot> = {}) {
@@ -152,7 +184,7 @@ export class PipelineRunner {
 
   private async saveStep(step: StepRecord) {
     this.steps.set(step.key, step);
-    await this.store.updateStep(step);
+    await this.writeStep(step);
     this.deps.onSnapshot?.(this.snapshot, [...this.steps.values()]);
   }
 
@@ -167,7 +199,7 @@ export class PipelineRunner {
       s.progress = Math.round(p * 100);
       if (Date.now() - lastSaved > 2000) {
         lastSaved = Date.now();
-        void this.store.updateStep(s).catch(() => undefined);
+        void this.writeStep(s).catch(() => undefined);
       }
     };
     try {
@@ -214,7 +246,11 @@ export class PipelineRunner {
       ? ['EXTRACT', 'CLEAN', 'ANALYZE', 'TTS', 'AUDIO_MERGE', 'TIMELINE', 'VIDEO', 'MUX']
       : ['EXTRACT', 'CLEAN', 'ANALYZE', 'TTS', 'AUDIO_MERGE', 'TIMELINE'];
 
-    for (const st of await this.store.loadSteps()) this.steps.set(st.key, st);
+    // Steps of the previous run only describe that run: show them as not-yet-checked until
+    // this run reaches them (cached ones complete instantly), instead of stale COMPLETED/FAILED.
+    for (const st of await this.store.loadSteps())
+      this.steps.set(st.key, { key: st.key, stage: st.stage, chapterIndex: st.chapterIndex, status: 'PENDING', progress: 0 });
+    if (this.steps.size) await this.store.saveSteps(this.orderedSteps());
     const outDir = this.paths.output(job.projectId);
     const workDir = this.paths.work(job.projectId);
     await fsp.mkdir(workDir, { recursive: true });
@@ -226,6 +262,14 @@ export class PipelineRunner {
     const invalidate = async (k: 'masterKey' | 'timelineKey') => {
       if (manifest[k] === undefined) return;
       manifest[k] = undefined;
+      await saveManifest();
+    };
+    /** Record cache entries before they are produced (a failed run's chapters stay findable). */
+    const own = async (kind: 'audio' | 'video', keys: string[]) => {
+      const c = (manifest.cacheKeys ??= { audio: [], video: [] });
+      const add = keys.filter((k) => !c[kind].includes(k));
+      if (!add.length) return;
+      c[kind].push(...add);
       await saveManifest();
     };
 
@@ -317,10 +361,14 @@ export class PipelineRunner {
         for (const c of chapters) this.defineStep(`VIDEO_CHAPTER_${c.index + 1}`, 'VIDEO', c.index);
         this.defineStep('MUX', 'MUX');
       }
+      const planned = new Set(['EXTRACT', 'CLEAN', 'ANALYZE', 'AUDIO_MERGE', 'TIMELINE', 'MUX', ...chapters.flatMap((c) => [`TTS_CHAPTER_${c.index + 1}`, `VIDEO_CHAPTER_${c.index + 1}`])]);
+      for (const st of this.steps.values())
+        if (!planned.has(st.key) || (!video && (st.stage === 'VIDEO' || st.stage === 'MUX')))
+          this.steps.set(st.key, { ...st, status: 'SKIPPED', progress: 100, message: 'Not part of this run' });
       await this.store.saveSteps(this.orderedSteps());
 
       // ── 4. TTS per chapter ─────────────────────────────────
-      const audios = await this.runTts(job, chapters);
+      const audios = await this.runTts(job, chapters, (keys) => own('audio', keys));
       manifest.audioKeys = audios.map((a) => a.cacheKey);
       await saveManifest();
 
@@ -379,8 +427,10 @@ export class PipelineRunner {
       this.setStage('TIMELINE', 1, 'Timeline ready');
 
       // ── 7+8. VIDEO + MUX ───────────────────────────────────
+      const videoFiles: string[] = [];
       if (video) {
         const plans = this.planVideo(job, timeline, audios, pageSizes);
+        videoFiles.push(...plans.map((p) => p.file));
         const mp4 = path.join(outDir, 'audiobook.mp4');
         const muxKey = hashKey(plans.map((p) => p.key), masterKey, s.video.embedSubtitles, s.language);
         const videoKeys = plans.map((p) => p.key);
@@ -397,6 +447,7 @@ export class PipelineRunner {
         if (finalIsCurrent) {
           await this.step('MUX', 'MUX', async () => ({ value: null, cached: true }));
         } else {
+          if (!reuseFinalVideo) await own('video', videoKeys);
           const segs = reuseFinalVideo ? [] : await this.renderVideo(job, plans, timeline);
           if (!reuseFinalVideo) manifest.videoKeys = segs.map((v) => v.key);
           manifest.muxKey = undefined;
@@ -427,6 +478,8 @@ export class PipelineRunner {
         this.stageProgress.set('VIDEO', 1);
       }
 
+      // Partial files a killed worker left next to this project's cache entries.
+      for (const f of [...audios.map((a) => a.file), ...videoFiles]) await removeTempSiblings(f, 60_000);
       await rmrf(workDir);
       const outputs = await this.collectOutputs(outDir);
       await this.store.saveOutputs(outputs);
@@ -440,7 +493,8 @@ export class PipelineRunner {
       throw e;
     } finally {
       if (this.flushTimer) clearTimeout(this.flushTimer);
-      await this.store.updateSnapshot(this.snapshot).catch(() => undefined);
+      await this.persistSnapshot();
+      await Promise.all([...this.stepWrites.values()].map((w) => w.catch(() => undefined)));
       for (const p of this.pools) {
         if (this.signal?.aborted) p.killAll();
         else await p.shutdown();
@@ -450,7 +504,7 @@ export class PipelineRunner {
   }
 
   private orderedSteps(): StepRecord[] {
-    const order = (s: StepRecord) => this.activeStages.indexOf(s.stage) * 10000 + (s.chapterIndex ?? 0);
+    const order = (s: StepRecord) => STAGES.indexOf(s.stage) * 10000 + (s.chapterIndex ?? 0);
     return [...this.steps.values()].sort((a, b) => order(a) - order(b));
   }
 
@@ -490,7 +544,7 @@ export class PipelineRunner {
     return segs;
   }
 
-  private async runTts(job: PipelineJob, chapters: Chapter[]): Promise<ChapterAudio[]> {
+  private async runTts(job: PipelineJob, chapters: Chapter[], onPlanned: (keys: string[]) => Promise<void>): Promise<ChapterAudio[]> {
     const s = job.settings;
     const threads = Math.max(1, Math.floor(this.cfg.cpuCount / this.cfg.MAX_CONCURRENT_TTS));
     const pool = this.pool(this.cfg.MAX_CONCURRENT_TTS, { KOKORO_THREADS: String(threads), OMP_NUM_THREADS: String(threads) });
@@ -500,6 +554,7 @@ export class PipelineRunner {
       const key = hashKey(TTS_VERSION, provider.engine, provider.version, s.tts.voice, s.tts.speed, this.cfg.TTS_SAMPLE_RATE, s.language, segments);
       return { c, segments, key, files: this.paths.chapterAudio(key) };
     });
+    await onPlanned(plans.map((p) => p.key));
     const total = plans.reduce((n, p) => n + p.segments.length, 0) || 1;
     const done = new Map<number, number>();
     const tick = (label: string, ch: Chapter) => {
@@ -579,7 +634,7 @@ export class PipelineRunner {
             const base = toAppError(err);
             if (['TTS_ENGINE_UNAVAILABLE', 'TTS_VOICE_NOT_FOUND', 'DISK_SPACE', 'DISK_FULL', 'CANCELLED'].includes(base.code)) throw base;
             throw new AppError('TTS_FAILED', `Audio generation failed for ${chapterLabel(p.c)}.`, {
-              hint: `Retry to continue from ${chapterLabel(p.c)} — finished chapters are kept.`,
+              hint: `${base.code === 'OUT_OF_MEMORY' && base.hint ? `${base.hint} ` : ''}Retry to continue from ${chapterLabel(p.c)} — finished chapters are kept.`,
               chapterIndex: p.c.index,
               retryable: true,
               cause: err,

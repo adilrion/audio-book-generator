@@ -132,7 +132,7 @@ export function ProjectView({ id, initialTime }: { id: string; initialTime?: num
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="readalong">
-          <TabsList className="w-full sm:w-fit">
+          <TabsList className="w-full sm:w-fit" aria-label="Preview">
             <TabsTrigger value="readalong">
               <Headphones aria-hidden /> Read-along
             </TabsTrigger>

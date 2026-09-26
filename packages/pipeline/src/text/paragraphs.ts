@@ -16,34 +16,69 @@ const COMPOUND_PREFIXES = new Set([
   'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'one', 'two', 'three', 'four', 'first', 'second', 'third',
   'mid', 'post', 'pre', 'anti', 'pro', 'semi', 'full', 'far', 'near', 'old', 'great', 'ill', 'quasi', 'vice', 'ever',
 ]);
+/** Prefixes that are almost never a plain syllable break; the others ("ex-", "pro-", "co-") need a real word after them. */
+const STRONG_PREFIXES = new Set([
+  'self', 'well', 'half', 'ill', 'non', 'anti', 'semi', 'quasi', 'vice', 'cross', 'twenty', 'thirty', 'forty', 'fifty',
+  'sixty', 'seventy', 'eighty', 'ninety',
+]);
+
+/** Line-final hyphen characters: ASCII hyphen-minus, U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN. */
+const HYPHEN_END = /[-\u2010\u2011]$/;
+const SOFT_HYPHEN = '\u00ad';
+/** "Revolu-" at a line end (a hyphen right after a letter, any hyphen flavour). */
+const BROKEN_END = /\p{L}[-\u2010\u2011\u00ad]$/u;
 
 const wordKey = (s: string) => s.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
+/** Words printed whole in the document. Line-break fragments ("com-" / "pleteness") are left out. */
 export function buildVocabulary(pages: CleanPage[]): Set<string> {
   const v = new Set<string>();
-  for (const p of pages) for (const l of p.lines) for (const t of l.tokens) v.add(wordKey(t.t));
+  let prevBroken = false;
+  for (const p of pages)
+    for (const l of p.lines) {
+      const last = l.tokens.length - 1;
+      l.tokens.forEach((t, k) => {
+        if ((k === 0 && prevBroken) || (k === last && BROKEN_END.test(t.t))) return;
+        v.add(wordKey(t.t));
+      });
+      prevBroken = last >= 0 && BROKEN_END.test(l.tokens[last].t);
+    }
   return v;
 }
 
 /**
  * Decide how to join "Revolu-" + "tion,". Returns the merged display text, or null if the
  * two tokens should stay separate words.
+ *
+ * `autoHyphen` is the character this document uses for automatic (discretionary) breaks when it
+ * distinguishes them from real hyphens (Chrome/Skia print U+2010 for `hyphens: auto` and keep
+ * U+002D for hyphens that are in the text). Then the decision is exact; otherwise the vocabulary decides.
  */
-export function dehyphenate(a: string, b: string, vocab: Set<string>): string | null {
-  const soft = a.endsWith('­');
-  if (!(a.endsWith('-') || soft) || a.length < 2) return null;
-  if (/^[-–—]+$/.test(a)) return null;
+export function dehyphenate(a: string, b: string, vocab: Set<string>, autoHyphen?: string): string | null {
+  const soft = a.endsWith(SOFT_HYPHEN);
+  if (!(HYPHEN_END.test(a) || soft) || a.length < 2) return null;
+  if (/^[-–—\u2010\u2011]+$/.test(a)) return null;
   const stem = a.slice(0, -1);
   if (!/\p{L}$/u.test(stem)) return null;
   if (soft) return stem + b;
+  if (autoHyphen) return a.endsWith(autoHyphen) ? stem + b : `${stem}-${b}`;
   if (!LOWER_START.test(b)) return `${stem}-${b}`; // "anti-" + "American"
   const joined = wordKey(stem + b);
   const hyph = wordKey(`${stem}-${b}`);
   if (vocab.has(joined)) return stem + b;
   if (vocab.has(hyph)) return `${stem}-${b}`;
-  const lastPart = wordKey(stem.split('-').pop() ?? stem);
-  if (COMPOUND_PREFIXES.has(lastPart)) return `${stem}-${b}`;
+  const lastPart = wordKey(stem.split(/[-\u2010\u2011]/).pop() ?? stem);
+  if (STRONG_PREFIXES.has(lastPart)) return `${stem}-${b}`;
+  if (COMPOUND_PREFIXES.has(lastPart) && vocab.has(wordKey(b))) return `${stem}-${b}`;
+  // Unknown: joining is the safer error for narration ("leavetaking" sounds right, "in cluded" does not).
   return stem + b;
+}
+
+/** U+2010 is this document's automatic-hyphenation mark if it ends several lines. */
+function detectAutoHyphen(lines: Line[]): string | undefined {
+  let n = 0;
+  for (const l of lines) if (/\p{L}\u2010$/u.test(l.tokens[l.tokens.length - 1]?.t ?? '') && ++n >= 3) return '\u2010';
+  return undefined;
 }
 
 interface PageStats {
@@ -79,6 +114,7 @@ export function buildParagraphs(pages: CleanPage[], body: number, vocab: Set<str
   const boldChars = allLines.filter((l) => l.bold).reduce((s, l) => s + l.text.length, 0);
   const totalChars = allLines.reduce((s, l) => s + l.text.length, 0) || 1;
   const bodyIsBold = boldChars / totalChars > 0.5;
+  const autoHyphen = detectAutoHyphen(allLines);
 
   const paragraphs: RawParagraph[] = [];
   let cur: RawParagraph | undefined;
@@ -118,7 +154,7 @@ export function buildParagraphs(pages: CleanPage[], body: number, vocab: Set<str
     const tokens = l.tokens.map((t) => ({ t: t.t, parts: [...t.parts] }));
     const last = p.tokens[p.tokens.length - 1];
     if (last && tokens.length) {
-      const merged = dehyphenate(last.t, tokens[0].t, vocab);
+      const merged = dehyphenate(last.t, tokens[0].t, vocab, autoHyphen);
       if (merged !== null) {
         last.t = merged;
         last.parts.push(...tokens[0].parts);

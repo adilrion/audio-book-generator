@@ -4,7 +4,8 @@ import * as React from 'react';
 import * as SliderPrimitive from '@radix-ui/react-slider';
 import { cn } from '@/lib/utils';
 
-function Slider({ className, defaultValue, value, min = 0, max = 100, ...props }: React.ComponentProps<typeof SliderPrimitive.Root>) {
+/** `aria-label` is forwarded to the thumb(s): Radix puts role="slider" on the thumb, not on the root. */
+function Slider({ className, defaultValue, value, min = 0, max = 100, 'aria-label': ariaLabel, ...props }: React.ComponentProps<typeof SliderPrimitive.Root>) {
   const values = React.useMemo(() => (Array.isArray(value) ? value : Array.isArray(defaultValue) ? defaultValue : [min]), [value, defaultValue, min]);
   return (
     <SliderPrimitive.Root
@@ -29,6 +30,7 @@ function Slider({ className, defaultValue, value, min = 0, max = 100, ...props }
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={i}
+          aria-label={ariaLabel}
           className="block size-4 shrink-0 rounded-full border border-primary bg-background shadow-sm ring-ring/50 transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
         />
       ))}

@@ -64,3 +64,29 @@ def test_on_demand_page_rendering(sample_pdf, tmp_path):
     res = render_chapter(p, Ctx())
     assert res["frames"] == 32
     assert len(list((tmp_path / "cache").rglob("page-*.png"))) == 2
+
+
+def test_page_cache_hit_reports_real_scale_for_clamped_pages(tmp_path):
+    """A tall page at 4K exceeds render.MAX_PIXELS, so it is rendered at a reduced scale.
+    A second chapter hitting the page-image cache must report that reduced scale too,
+    otherwise highlights and the camera are placed with the wrong pixels-per-point."""
+    import cv2
+    import pymupdf as fitz
+
+    from audiobook_worker.video.render_chapter import prepare_pages
+
+    pdf = tmp_path / "tall.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=1584)
+    page.insert_text((72, 100), "A tall page", fontsize=14)
+    doc.save(str(pdf))
+    doc.close()
+    params = {"width": 3840, "height": 2160, "style": {"animation": "follow"}, "pdfPath": str(pdf),
+              "pageDir": str(tmp_path / "pages"), "pages": {"1": {"w": 612, "h": 1584}},
+              "segments": [{"start": 0, "end": 1, "page": 1, "rects": [[72, 86, 160, 104]]}]}
+    first = prepare_pages(params)["1"]
+    second = prepare_pages(params)["1"]  # cache hit
+    img = cv2.imread(first["image"])
+    real = img.shape[1] / 612
+    assert abs(first["scale"] - real) < 0.01
+    assert abs(second["scale"] - real) < 0.01, (second["scale"], real)

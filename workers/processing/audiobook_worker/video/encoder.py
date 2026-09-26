@@ -1,9 +1,10 @@
 """FFmpeg raw-frame pipe encoder with Apple VideoToolbox hardware encoding."""
 from __future__ import annotations
 
+import collections
 import functools
-import os
 import subprocess
+import threading
 
 from ..errors import WorkerError
 
@@ -54,10 +55,16 @@ class FrameWriter:
                *video_codec_args(self.codec, fps, bitrate, crf),
                "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
                "-video_track_timescale", str(fps * 1000), "-f", "mp4", out_path]
-        self._stderr_path = out_path + ".log"
-        self._stderr = open(self._stderr_path, "wb")
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=self._stderr, bufsize=width * height * 3)
+        # stderr is drained by a thread into a bounded tail: no log file to leave behind, no pipe deadlock
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=width * height * 3)
+        self._err: collections.deque[bytes] = collections.deque(maxlen=64)
+        self._err_reader = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._err_reader.start()
         self.frames = 0
+
+    def _drain_stderr(self) -> None:
+        for line in iter(self.proc.stderr.readline, b""):
+            self._err.append(line)
 
     def write(self, frame_bytes) -> None:
         try:
@@ -67,10 +74,13 @@ class FrameWriter:
             self._fail()
 
     def _fail(self):
-        self.proc.wait(timeout=10)
-        self._stderr.close()
-        with open(self._stderr_path, "rb") as fh:
-            err = fh.read()[-2000:].decode("utf-8", "replace")
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+        self._err_reader.join(timeout=5)
+        err = b"".join(self._err)[-2000:].decode("utf-8", "replace")
         raise WorkerError("FFMPEG_FAILED", "Video encoding failed.", {"stderr": err, "codec": self.codec}, retryable=True)
 
     def close(self) -> None:
@@ -81,14 +91,19 @@ class FrameWriter:
         code = self.proc.wait()
         if code != 0:
             self._fail()
-        self._stderr.close()
-        try:
-            os.unlink(self._stderr_path)
-        except FileNotFoundError:
-            pass
+        self._err_reader.join(timeout=5)
 
     def abort(self) -> None:
+        """Kill ffmpeg and reap it (no zombie; the partial output is removed by atomic_path)."""
         try:
             self.proc.kill()
-        finally:
-            self._stderr.close()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            self.proc.stdin.close()
+        except (OSError, ValueError):
+            pass

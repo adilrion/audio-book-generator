@@ -357,3 +357,165 @@ describe('ProjectsService.process', () => {
     expect(t.jobs).toHaveLength(0);
   });
 });
+
+describe('ProjectsService.outputPath', () => {
+  const svc = new ProjectsService(cfg, {} as PrismaService, {} as QueueService, {} as PythonService);
+
+  it('resolves a known output inside the project output folder', () => {
+    expect(svc.outputPath('3c0691e6-4ec6-44b0-8fa9-21597810585f', 'audiobook.mp4')).toBe(path.join(cfg.storage.output, '3c0691e6-4ec6-44b0-8fa9-21597810585f', 'audiobook.mp4'));
+  });
+
+  it('refuses path traversal through the project id (GET /projects/..%2F../output/package.json)', () => {
+    for (const id of ['..', '../..', '..%2F..', '../../../etc', 'a/b', '.', '']) {
+      expect(() => svc.outputPath(id, 'package.json'), id).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+    }
+  });
+
+  it('refuses unsafe file names', () => {
+    for (const name of ['.env', '../x', 'a/b', '..', '.work']) expect(() => svc.outputPath('p1', name), name).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
+  });
+
+  it('never lists files outside storage/output', async () => {
+    await expect(svc.outputs('../..')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('ProjectsService.cancel', () => {
+  function cancelSetup(projectStatus: string, jobStatus: string) {
+    const row = { id: 'proj-1', status: projectStatus, cancelRequested: false, snapshot: { status: projectStatus, message: 'Waiting for the worker…' } as Record<string, unknown>, document: {} };
+    const job = { id: 'rj-1', projectId: 'proj-1', status: jobStatus };
+    const prisma = {
+      project: {
+        async findUnique() {
+          return { ...row };
+        },
+        async update({ data }: { data: Record<string, unknown> }) {
+          Object.assign(row, data);
+          return { ...row };
+        },
+      },
+      renderJob: {
+        async updateMany({ where, data }: { where: { projectId: string; status: string }; data: Record<string, unknown> }) {
+          if (job.projectId !== where.projectId || job.status !== where.status) return { count: 0 };
+          Object.assign(job, data);
+          return { count: 1 };
+        },
+      },
+    };
+    const svc = new ProjectsService(cfg, prisma as unknown as PrismaService, {} as QueueService, {} as PythonService);
+    return { svc, row, job };
+  }
+
+  it('cancels a run that is still queued', async () => {
+    const t = cancelSetup('PENDING', 'PENDING');
+    await t.svc.cancel('proj-1');
+    expect(t.job.status).toBe('CANCELLED');
+    expect(t.row).toMatchObject({ status: 'CANCELLED', cancelRequested: true });
+    expect(t.row.snapshot).toMatchObject({ status: 'CANCELLED', message: 'Processing was cancelled.' });
+  });
+
+  it('asks the worker to stop a run it already claimed, even while the project row still says PENDING', async () => {
+    const t = cancelSetup('PENDING', 'EXTRACTING'); // claimed; the runner's first snapshot has not landed yet
+    await t.svc.cancel('proj-1');
+    expect(t.row.cancelRequested).toBe(true);
+    // Not CANCELLED yet: the worker is still running it and will report CANCELLED once it stopped.
+    // (Showing CANCELLED here would let the user start a second run on top of the first.)
+    expect(t.row.status).toBe('PENDING');
+    expect(t.job.status).toBe('EXTRACTING');
+  });
+
+  it('asks the worker to stop a running project', async () => {
+    const t = cancelSetup('GENERATING_AUDIO', 'GENERATING_AUDIO');
+    await t.svc.cancel('proj-1');
+    expect(t.row).toMatchObject({ status: 'GENERATING_AUDIO', cancelRequested: true });
+  });
+});
+
+describe('ProjectsService remove / cleanCache with a PDF shared by several projects', () => {
+  // Duplicate uploads share one Document, and with it every hash-keyed cache (extraction +
+  // analysis, page renders, previews) and — with the same voice — the chapter audio files.
+  function sharedSetup(opts: { siblings: number; activeSiblings?: number }) {
+    const hash = `shared-${crypto.randomUUID()}`;
+    const audioKey = `k-${crypto.randomUUID()}`;
+    const files = {
+      extraction: path.join(cfg.storage.extracted, hash, 'extract-x', 'meta.json'),
+      pages: path.join(cfg.storage.renders, 'pages', hash, 'page-0001.png'),
+      preview: path.join(cfg.storage.renders, 'preview', hash, 'page-0001.jpg'),
+      audio: path.join(cfg.storage.audio, `${audioKey}.flac`),
+      upload: path.join(cfg.storage.uploads, `${hash}.pdf`),
+      bOutput: path.join(cfg.storage.output, 'proj-b', 'audiobook.m4a'),
+      bManifest: path.join(cfg.storage.output, 'proj-b', 'manifest.json'),
+    };
+    for (const f of Object.values(files)) {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, 'x'.repeat(100));
+    }
+    const onlyB = path.join(cfg.storage.audio, `only-b-${crypto.randomUUID()}.flac`); // another voice: B alone uses it
+    fs.writeFileSync(onlyB, 'x');
+    fs.writeFileSync(files.bManifest, JSON.stringify({ pdfHash: hash, audioKeys: [audioKey, path.basename(onlyB, '.flac')], videoKeys: [] }));
+    const aDir = path.join(cfg.storage.output, 'proj-a0');
+    fs.rmSync(aDir, { recursive: true, force: true });
+    if (opts.siblings > 0) {
+      // the sibling was processed with the same voice → same chapter audio
+      fs.mkdirSync(aDir, { recursive: true });
+      fs.writeFileSync(path.join(aDir, 'manifest.json'), JSON.stringify({ pdfHash: hash, audioKeys: [audioKey], videoKeys: [] }));
+    }
+    const deleted: string[] = [];
+    const prisma = {
+      project: {
+        async findUnique() {
+          return { id: 'proj-b', status: 'COMPLETED', documentId: 'doc-1', document: { id: 'doc-1', hash, filePath: files.upload } };
+        },
+        async count() {
+          return opts.activeSiblings ?? 0; // cleanCache: siblings that are processing
+        },
+        async findMany() {
+          return Array.from({ length: opts.siblings }, (_, i) => ({ id: `proj-a${i}` }));
+        },
+        async delete() {
+          deleted.push('project');
+        },
+        async update() {},
+      },
+      document: {
+        async delete() {
+          deleted.push('document');
+        },
+      },
+      processingStep: { async deleteMany() {} },
+    };
+    const svc = new ProjectsService(cfg, prisma as unknown as PrismaService, {} as QueueService, {} as PythonService);
+    return { svc, files: { ...files, onlyB }, deleted };
+  }
+
+  it('deleting one of them keeps the caches the other project still uses', async () => {
+    // (before the fix, deleting B wiped the extraction / page renders / audio A still needs)
+    const t = sharedSetup({ siblings: 1 });
+    await expect(t.svc.remove('proj-b', true)).resolves.toEqual({ ok: true, outputsKept: false });
+    for (const k of ['extraction', 'pages', 'preview', 'audio', 'upload'] as const) expect(fs.existsSync(t.files[k]), k).toBe(true);
+    expect(fs.existsSync(t.files.onlyB), 'audio only this project used').toBe(false);
+    expect(fs.existsSync(t.files.bOutput)).toBe(false);
+    expect(t.deleted).toEqual(['project']);
+  });
+
+  it('deleting the last project that uses the PDF removes its caches and the upload', async () => {
+    const t = sharedSetup({ siblings: 0 });
+    await t.svc.remove('proj-b', false);
+    for (const k of ['extraction', 'pages', 'preview', 'audio', 'upload'] as const) expect(fs.existsSync(t.files[k]), k).toBe(false);
+    expect(fs.existsSync(t.files.bOutput)).toBe(true); // outputs kept by default
+    expect(t.deleted).toEqual(['project', 'document']);
+  });
+
+  it('deleting one of them keeps the PDF caches even when the other project has no manifest yet (first run, still extracting)', async () => {
+    const t = sharedSetup({ siblings: 1 });
+    fs.rmSync(path.join(cfg.storage.output, 'proj-a0'), { recursive: true, force: true });
+    await t.svc.remove('proj-b', false);
+    for (const k of ['extraction', 'pages', 'preview', 'upload'] as const) expect(fs.existsSync(t.files[k]), k).toBe(true);
+  });
+
+  it('refuses to clean the cache while another project using the same PDF is processing', async () => {
+    const t = sharedSetup({ siblings: 1, activeSiblings: 1 });
+    await expect(t.svc.cleanCache('proj-b')).rejects.toMatchObject({ code: 'CONFLICT' });
+    for (const k of ['extraction', 'pages', 'preview', 'audio'] as const) expect(fs.existsSync(t.files[k]), k).toBe(true);
+  });
+});

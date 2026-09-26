@@ -47,7 +47,7 @@ function ChapterSteps({ steps, titles }: { steps: StepRecord[]; titles: Map<numb
           )}
           {s.message && s.status !== 'FAILED' && <span className="hidden truncate text-muted-foreground sm:inline">{s.message}</span>}
           {s.status === 'FAILED' && <span className="truncate text-destructive">{s.error?.message ?? 'Failed'}</span>}
-          {s.status === 'COMPLETED' && <span className="shrink-0 text-muted-foreground/70 tabular">{formatElapsed(s.startedAt, s.finishedAt)}</span>}
+          {s.status === 'COMPLETED' && <span className="shrink-0 text-muted-foreground tabular">{formatElapsed(s.startedAt, s.finishedAt)}</span>}
         </li>
       ))}
     </ul>
@@ -85,7 +85,7 @@ function StageRowView({ row, chapterLine, titles }: { row: StageRow; chapterLine
             </div>
           ) : null}
           {cachedTag && <span className="hidden text-xs text-muted-foreground sm:inline">{cachedTag}</span>}
-          {elapsed && row.state === 'done' && <span className="hidden text-xs text-muted-foreground/70 tabular sm:inline">{elapsed}</span>}
+          {elapsed && row.state === 'done' && <span className="hidden text-xs text-muted-foreground tabular sm:inline">{elapsed}</span>}
         </div>
       </div>
       {(row.message || chapterLine || row.error) && (

@@ -16,7 +16,7 @@ import { Progress } from '@/components/ui/progress';
 import { useApi } from '@/hooks/use-api';
 import { ApiError, api, toApiError, type UploadHandle, uploadProject } from '@/lib/api';
 import { estimateNarrationSec, formatBytes, formatDuration, formatNumber } from '@/lib/format';
-import { cloneSettings, diffSettings, isEmptyPatch } from '@/lib/settings';
+import { cloneSettings, diffSettings, isEmptyPatch, settingsForUpload } from '@/lib/settings';
 
 type Upload =
   | { state: 'idle' }
@@ -152,7 +152,7 @@ export function NewProject() {
     }
     setUpload({ state: 'uploading', file, progress: 0 });
     const h = uploadProject(file, {
-      settings,
+      settings: settingsForUpload(settings),
       onProgress: (p) => setUpload((u) => (u.state === 'uploading' && u.file === file ? { ...u, progress: p } : u)),
     });
     handle.current = h;

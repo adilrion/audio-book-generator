@@ -1,5 +1,6 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter, HttpException, Logger } from '@nestjs/common';
 import type { Response } from 'express';
+import { loadConfig } from '@app/config';
 import { describeError } from '@app/shared';
 import { toUserError } from './errors';
 
@@ -22,6 +23,17 @@ const STATUS: Record<string, number> = {
   DISK_FULL: 507, // ENOSPC mapped by toAppError()
 };
 
+/** Errors from Express middleware (body-parser via http-errors) carry a safe 4xx status + message. */
+function exposedClientError(e: unknown): { status: number; message: string } | undefined {
+  const h = e as { status?: unknown; statusCode?: unknown; expose?: unknown; message?: unknown };
+  const status = Number(h?.status ?? h?.statusCode);
+  if (!(e instanceof Error) || h.expose !== true || !(status >= 400 && status < 500)) return undefined;
+  return { status, message: status === 413 ? 'The request is too large.' : String(h.message) };
+}
+
+// Nest turns multer's LIMIT_FILE_SIZE into PayloadTooLargeException('File too large').
+const MULTER_FILE_TOO_LARGE = 'File too large';
+
 /** Users get { error: { code, message, hint } }; technical details only go to the log. */
 @Catch()
 export class UserErrorFilter implements ExceptionFilter {
@@ -33,7 +45,19 @@ export class UserErrorFilter implements ExceptionFilter {
       const status = exception.getStatus();
       const body = exception.getResponse();
       const message = typeof body === 'string' ? body : ((body as { message?: string | string[] }).message ?? exception.message);
+      if (status === 413 && message === MULTER_FILE_TOO_LARGE) {
+        const mb = loadConfig().MAX_UPLOAD_MB;
+        const hint = 'Split the PDF or raise MAX_UPLOAD_MB in .env.';
+        res.status(413).json({ error: { code: 'FILE_TOO_LARGE', message: `This file is larger than the ${mb} MB upload limit.`, hint, retryable: false } });
+        return;
+      }
       res.status(status).json({ error: { code: `HTTP_${status}`, message: Array.isArray(message) ? message.join(', ') : message, retryable: false } });
+      return;
+    }
+    const client = exposedClientError(exception);
+    if (client) {
+      this.log.warn(`HTTP_${client.status}: ${describeError(exception)}`);
+      res.status(client.status).json({ error: { code: `HTTP_${client.status}`, message: client.message, retryable: false } });
       return;
     }
     const e = toUserError(exception);

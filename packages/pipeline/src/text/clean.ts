@@ -1,7 +1,11 @@
 import type { CleaningReport, ExtractedPage, Rect } from '@app/types';
 import { type CleanPage, type Line, type Token } from './model';
 
-const PAGE_NUMBER = /^[\s\-–—|•·]*(page\s+)?(\d{1,4}|[ivxlcdm]{1,7})(\s*(of|\/)\s*\d{1,4})?[\s\-–—|•·]*$/i;
+const PAGE_NUMBER = /^[\s\-–—|•·]*[[{(]?(page\s+)?(\d{1,4}|[ivxlcdm]{1,7})(\s*(of|\/)\s*\d{1,4})?[\]})]?[\s\-–—|•·]*$/i;
+/** A bare (bracketed) number: "12", "{xii}", "[28]" — printed page references, line numbers, figure ticks. */
+const NUMBER_ONLY = /^[[{(]?(\d{1,4}|[ivxlcdm]{1,7})[\]})]?$/i;
+/** A drop cap: one big capital (optionally after an opening quote) or a lone opening quote. */
+const DROP_CAP = /^(["'“‘(]?\p{Lu}|["'“‘])$/u;
 const TOC_LEADER = /(\.\s*){4,}\s*\d{1,4}\s*$|(…\s*){2,}\s*\d{1,4}\s*$/;
 
 function iou(a: Rect, b: Rect): number {
@@ -53,7 +57,7 @@ export function toCleanPages(pages: ExtractedPage[]): { pages: CleanPage[]; remo
             removedDuplicates++;
             continue;
           }
-          const t = w.t.replace(/­$/, '-').replace(/[​﻿]/g, '');
+          const t = w.t.replace(/\u00ad(?!$)/g, '').replace(/[\u200b\ufeff]/g, ''); // keep a final soft hyphen: it marks a sure join
           if (t) tokens.push({ t, parts: [{ page: p.page, b: w.b }] });
         }
         if (!tokens.length) continue;
@@ -81,6 +85,34 @@ export function toCleanPages(pages: ExtractedPage[]): { pages: CleanPage[]; remo
 }
 
 /**
+ * Join a drop cap ("I" printed large, "T is a truth…" beside it) to the first word of the line it drops into.
+ * Otherwise the letter is lost (it looks like a page number "I" in the top margin) or read as its own heading.
+ */
+export function mergeDropCaps(p: CleanPage, body: number): number {
+  let merged = 0;
+  const caps = p.lines.filter((l) => l.tokens.length === 1 && l.size >= body * 1.6 && DROP_CAP.test(l.text));
+  for (const cap of caps) {
+    const h = cap.b[3] - cap.b[1];
+    let best: Line | undefined;
+    let bestD = Infinity;
+    for (const l of p.lines) {
+      if (l === cap || Math.abs(l.size - body) > body * 0.2) continue;
+      const dx = l.b[0] - cap.b[2];
+      const dy = l.b[1] - cap.b[1];
+      if (dx < -body * 0.3 || dx > body * 1.5 || dy < -body * 0.6 || dy > h * 0.5) continue;
+      if (Math.abs(dx) + Math.abs(dy) < bestD) [best, bestD] = [l, Math.abs(dx) + Math.abs(dy)];
+    }
+    if (!best || !/^[\p{L}"'“‘]/u.test(best.tokens[0].t)) continue;
+    const first = best.tokens[0];
+    best.tokens[0] = { t: cap.text + first.t, parts: [...cap.tokens[0].parts, ...first.parts] };
+    best.text = best.tokens.map((t) => t.t).join(' ');
+    p.lines = p.lines.filter((l) => l !== cap);
+    merged++;
+  }
+  return merged;
+}
+
+/**
  * Remove running headers/footers, page numbers and TOC leader lines.
  * Deterministic and position-aware: only lines in the top/bottom margin zones are candidates.
  */
@@ -88,6 +120,7 @@ export function cleanPages(extracted: ExtractedPage[]): { pages: CleanPage[]; re
   const { pages, removedDuplicates } = toCleanPages(extracted);
   const body = bodyFontSize(pages);
   const n = pages.length;
+  for (const p of pages) mergeDropCaps(p, body);
 
   const zoneOf = (p: CleanPage, l: Line): 'top' | 'bottom' | null => {
     const zone = Math.max(36, p.height * 0.09);
@@ -118,9 +151,13 @@ export function cleanPages(extracted: ExtractedPage[]): { pages: CleanPage[]; re
         removedTocLines++;
         return false;
       }
+      if (NUMBER_ONLY.test(l.text) && l.size <= body * 0.85) {
+        removedPageNumbers++; // small page references in the margin ("{28}"), wherever they are
+        return false;
+      }
       const z = zoneOf(p, l);
       if (!z) return true;
-      if (PAGE_NUMBER.test(l.text)) {
+      if (PAGE_NUMBER.test(l.text) && l.size <= body * 1.15) {
         removedPageNumbers++;
         return false;
       }

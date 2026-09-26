@@ -71,6 +71,38 @@ export async function rmrf(p: string): Promise<void> {
   await fsp.rm(p, { recursive: true, force: true });
 }
 
+/**
+ * Remove leftover temp files of `file` from interrupted atomic writes: Python's
+ * `.<name>.XXXX<ext>` (+ encoder `.log`) and Node's `<name>.<hex>.tmp`. A killed worker
+ * can't clean these up itself. Only files older than `minAgeMs` are removed, so a
+ * concurrent writer of the same content-addressed file is left alone. Returns bytes freed.
+ */
+export async function removeTempSiblings(file: string, minAgeMs = 0): Promise<number> {
+  const dir = path.dirname(file);
+  const name = path.basename(file);
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(dir);
+  } catch {
+    return 0;
+  }
+  let freed = 0;
+  const now = Date.now();
+  for (const e of entries) {
+    if (!(e.startsWith(`.${name}.`) || (e.startsWith(`${name}.`) && e.endsWith('.tmp')))) continue;
+    const p = path.join(dir, e);
+    try {
+      const st = await fsp.stat(p);
+      if (!st.isFile() || now - st.mtimeMs < minAgeMs) continue;
+      await fsp.rm(p, { force: true });
+      freed += st.size;
+    } catch {
+      /* vanished meanwhile */
+    }
+  }
+  return freed;
+}
+
 /** Async line reader for JSONL files — streams, constant memory. */
 export async function* readJsonLines<T>(file: string): AsyncGenerator<T> {
   const rl = (await import('node:readline')).createInterface({

@@ -67,17 +67,7 @@ const OCR_MODES: { value: OcrMode; label: string }[] = [
   { value: 'force', label: 'Always — OCR every page' },
 ];
 
-/** Returns a user-facing problem with the settings, or undefined when they can be submitted. */
-export function validateSettings(s: ProjectSettings): string | undefined {
-  const r = s.text.chapterRange;
-  if (r) {
-    if (!Number.isInteger(r.from) || !Number.isInteger(r.to) || r.from < 1 || r.to < 1) return 'Chapter numbers must be whole numbers starting at 1.';
-    if (r.from > r.to) return 'The first chapter must not be after the last chapter.';
-  }
-  if (!s.tts.voice) return 'Choose a voice.';
-  if (s.language === 'bn') return 'Bangla narration is coming soon.';
-  return undefined;
-}
+export { validateSettings } from '@/lib/settings';
 
 // ─────────────────────────────── layout helpers ───────────────────────────────
 
@@ -334,7 +324,7 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
     <fieldset disabled={disabled} className={cn('grid min-w-0 gap-8', className)}>
       {/* ── Output ── */}
       <Section icon={<Film />} title="Output" description="What to produce from the book.">
-        <RadioGroup value={value.outputMode} onValueChange={(m) => update((d) => void (d.outputMode = m as ProjectSettings['outputMode']))} className="grid gap-3 sm:grid-cols-2">
+        <RadioGroup aria-label="Output" value={value.outputMode} onValueChange={(m) => update((d) => void (d.outputMode = m as ProjectSettings['outputMode']))} className="grid gap-3 sm:grid-cols-2">
           <RadioCard value="audiobook_video">
             <span className="flex w-full items-center gap-2 font-medium">
               <Film className="size-4 text-muted-foreground" aria-hidden /> Audiobook + Animated PDF
@@ -401,6 +391,7 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
           <div className="grid content-start gap-5">
             <Field label="Video format">
               <RadioGroup
+                aria-label="Video format"
                 value={v.aspectRatio}
                 disabled={!videoOn || disabled}
                 onValueChange={(a) =>
@@ -501,7 +492,7 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
             </Field>
 
             <Field label="Background theme">
-              <RadioGroup value={v.theme} disabled={!videoOn || disabled} onValueChange={(th) => update((d) => void (d.video.theme = th as VideoTheme))} className="grid grid-cols-3 gap-2">
+              <RadioGroup aria-label="Background theme" value={v.theme} disabled={!videoOn || disabled} onValueChange={(th) => update((d) => void (d.video.theme = th as VideoTheme))} className="grid grid-cols-3 gap-2">
                 {THEMES.map((th) => (
                   <RadioCard key={th.value} value={th.value} className="flex-row items-center gap-2 p-2.5">
                     <span className="grid size-6 shrink-0 place-items-center rounded-md border border-black/10" style={{ background: th.bg }} aria-hidden>

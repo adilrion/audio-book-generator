@@ -11,8 +11,10 @@ from dataclasses import dataclass, field
 PAGE_FADE = 0.45          # seconds of cross-fade on page change
 PAGE_SWITCH_LEAD = 0.30   # start the page change this long before the next page's first sentence
 CAM_MOVE = 0.90           # seconds for a camera pan
+CAM_MOVE_MIN = 0.40       # fastest pan (big jumps with little or no pause, e.g. mid-sentence column break)
 CAM_LEAD = 0.35           # start panning slightly before the sentence starts
 DEAD_ZONE = 0.18          # fraction of the visible height the target may drift before we pan
+EDGE = 0.04               # margin (fraction of visible height) kept between the words being read and the frame edge
 HL_FADE_IN = 0.12
 HL_HOLD = 0.80            # keep highlight this long into a pause before fading
 HL_FADE_OUT = 0.30
@@ -79,23 +81,94 @@ class CameraPath:
         return k.y_from + (k.y_to - k.y_from) * smoothstep((t - k.t0) / k.dur)
 
 
+def _inv_smoothstep(p: float) -> float:
+    lo, hi = 0.0, 1.0
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if smoothstep(mid) < p else (lo, mid)
+    return hi
+
+
+def reading_parts(segments: list[dict]) -> list[tuple[float, float, list]]:
+    """(start, end, rects) camera targets in reading order. A sentence that continues at the top of
+    the next column is split at the column break (time shared by printed width) so the camera can
+    follow it. Paragraph highlighting repeats one paragraph's rects for each sentence: never split."""
+    parts = []
+    for i, seg in enumerate(segments):
+        rects = seg["rects"]
+        groups = [[rects[0]]] if rects else []
+        for r in rects[1:]:
+            last = groups[-1][-1]
+            if r[1] < last[1] - 2 * max(1.0, last[3] - last[1]):  # reading jumps back up: next column
+                groups.append([r])
+            else:
+                groups[-1].append(r)
+        repeated = any(0 <= k < len(segments) and segments[k]["rects"] == rects for k in (i - 1, i + 1))
+        if len(groups) < 2 or repeated:
+            parts.append((seg["start"], seg["end"], rects))
+            continue
+        widths = [sum(max(1.0, r[2] - r[0]) for r in g) for g in groups]
+        t, dur, total = seg["start"], seg["end"] - seg["start"], sum(widths)
+        for g, w in zip(groups, widths):
+            parts.append((t, t + dur * w / total, g))
+            t += dur * w / total
+    return parts
+
+
+def _window(rects: list, visible_h: float) -> tuple[float, float]:
+    """Camera centres that show `rects` (or their first line, if they cannot all fit) inside the frame."""
+    m = EDGE * visible_h
+    y0, y1 = union_y(rects) if rects else (0.0, 0.0)
+    if y1 - y0 > visible_h - 2 * m:
+        y0, y1 = rects[0][1], rects[0][3]
+    return y1 - visible_h / 2 + m, y0 + visible_h / 2 - m
+
+
+def _pan_fraction(y_from: float, y_to: float, lo: float, hi: float, leaving: bool) -> float:
+    """Eased-time fraction of a pan y_from→y_to at which the camera enters (or leaves) [lo, hi]."""
+    d = y_to - y_from
+    if abs(d) < 1e-9:
+        return 1.0 if leaving else 0.0
+    edge = (lo if d < 0 else hi) if leaving else (hi if d < 0 else lo)
+    p = (edge - y_from) / d
+    if leaving:
+        return 1.0 if p >= 1 else _inv_smoothstep(max(0.0, p))
+    return 0.0 if p <= 0 else _inv_smoothstep(min(1.0, p))
+
+
 def build_camera_path(segments: list[dict], ph: float, visible_h: float, t_start: float, follow: bool) -> CameraPath:
-    """Piecewise eased vertical pan: only move when the next sentence leaves the dead zone."""
+    """Piecewise eased vertical pan: only move when the next sentence leaves the dead zone.
+
+    A pan normally starts CAM_LEAD before the sentence. When that would still show the sentence
+    off-screen as it starts (a big jump, e.g. to the top of the next column), the pan starts as
+    soon as the previous words are done and, if the pause is too short, runs faster (CAM_MOVE_MIN).
+    """
     path = CameraPath()
     if not segments or not follow:
         cy = ph / 2
         path.keys.append(Keyframe(t_start, cy, cy, 0.0))
         return path
-    cur = target_y(segments[0]["rects"], ph, visible_h)
+    parts = reading_parts(segments)
+    cur = target_y(parts[0][2], ph, visible_h)
     path.keys.append(Keyframe(t_start, cur, cur, 0.0))
-    for seg in segments[1:]:
-        tgt = target_y(seg["rects"], ph, visible_h)
-        if abs(tgt - cur) <= DEAD_ZONE * visible_h:
-            continue
-        t0 = max(seg["start"] - CAM_LEAD, path.keys[-1].t0 + 0.05)
-        y_from = path.y_at(t0)
-        path.keys.append(Keyframe(t0, y_from, tgt, CAM_MOVE))
-        cur = tgt
+    prev_end, prev_rects = parts[0][1], parts[0][2]
+    for start, end, rects in parts[1:]:
+        tgt = target_y(rects, ph, visible_h)
+        if abs(tgt - cur) > DEAD_ZONE * visible_h:
+            earliest = path.keys[-1].t0 + 0.05
+            t0, dur = max(start - CAM_LEAD, earliest), CAM_MOVE
+            y_from = path.keys[-1].y_to
+            u_in = _pan_fraction(y_from, tgt, *_window(rects, visible_h), leaving=False)
+            if t0 + u_in * dur > start:  # the words would still be off-screen when they are read
+                u_out = _pan_fraction(y_from, tgt, *_window(prev_rects, visible_h), leaving=True)
+                t0 = max(start - u_in * dur, prev_end - u_out * dur, earliest)
+                if t0 + u_in * dur > start:  # pause too short for a normal pan: go faster, centred on the pause
+                    span = u_in - u_out
+                    dur = min(CAM_MOVE, max(CAM_MOVE_MIN, (start - prev_end) / span if span > 1e-6 else CAM_MOVE))
+                    t0 = max((prev_end + start) / 2 - (u_in + u_out) / 2 * dur, earliest)
+            path.keys.append(Keyframe(t0, path.y_at(t0), tgt, dur))
+            cur = tgt
+        prev_end, prev_rects = end, rects
     return path
 
 

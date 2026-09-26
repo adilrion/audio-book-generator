@@ -11,13 +11,34 @@ from pathlib import Path
 
 from ..errors import WorkerError
 from ..pdf.common import open_pdf
-from ..pdf.render import render_page
+from ..pdf.render import effective_scale, render_page
 from ..util import atomic_path
 from . import layout
 from .compositor import ChapterCompositor
 from .encoder import FrameWriter
 
 MAX_ZOOM = 1.07
+STALE_TMP_SECONDS = 3600
+
+
+def sweep_stale_temp(directory: str | os.PathLike, max_age: float = STALE_TMP_SECONDS) -> None:
+    """Remove temp segments of renders that died: a cancelled job SIGKILLs the worker, so
+    atomic_path never cleans up and ffmpeg finishes a partial `.<key>.mp4.<rand>.mp4`.
+    A live render writes continuously, so only files untouched for `max_age` are removed."""
+    now = time.time()
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return
+    for e in entries:
+        n = e.name
+        if not (n.startswith(".") and ".mp4." in n and n.endswith((".mp4", ".mp4.log"))):
+            continue
+        try:
+            if e.is_file() and now - e.stat().st_mtime > max_age:
+                os.unlink(e.path)
+        except OSError:
+            pass
 
 
 def page_render_scale(w: float, h: float, W: int, H: int, animation: str) -> float:
@@ -42,8 +63,9 @@ def prepare_pages(params: dict, ctx=None) -> dict:
             scale = page_render_scale(w, h, W, H, animation)
             img = page_dir / f"{scale:.2f}" / f"page-{p:04d}.png"
             if not img.exists():
-                r = render_page(doc, p, scale, str(img))
-                scale = r["scale"]
+                scale = render_page(doc, p, scale, str(img))["scale"]
+            else:  # cached image: report the scale it was really rendered at (MAX_PIXELS may have capped it)
+                scale = effective_scale(doc[p - 1], scale)
             out[str(p)] = {"image": str(img), "scale": scale, "w": w, "h": h}
             if ctx:
                 ctx.progress(i + 1, len(needed), None, phase="pages")
@@ -63,6 +85,7 @@ def render_chapter(params: dict, ctx=None) -> dict:
     comp = ChapterCompositor(params)
     enc = params.get("encoder", {})
     out_path = params["outPath"]
+    sweep_stale_temp(os.path.dirname(os.path.abspath(out_path)))
     started = time.monotonic()
     with atomic_path(out_path) as tmp:
         writer = FrameWriter(tmp, comp.W, comp.H, fps, enc.get("codec", "auto"), enc.get("bitrate", "6M"),

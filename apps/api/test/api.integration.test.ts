@@ -108,6 +108,27 @@ describe.skipIf(!canRun)('API integration (live server)', () => {
     expect(list.body.map((p) => p.id)).toContain(project.id);
   });
 
+  it('reuses the Document for a duplicate upload and keeps a UTF-8 file name intact', async () => {
+    const fileName = 'বাংলা বই – Ünïcode.pdf';
+    const res = await call<ProjectDetail>('POST', '/projects', uploadForm(samplePdf, fileName, settings));
+    expect(res.status).toBe(201);
+    created.add(res.body.id);
+    expect(res.body.id).not.toBe(project.id);
+    expect(res.body.document.hash).toBe(project.document.hash); // same Document, stored once
+    expect(res.body.fileName).toBe(fileName); // multer's latin1 default turned this into mojibake
+    const del = await call<{ ok: boolean }>('DELETE', `/projects/${res.body.id}?deleteOutputs=true`);
+    expect(del.status).toBe(200);
+    created.delete(res.body.id);
+    // the first project still owns the PDF
+    expect(fs.existsSync(path.join(cfg.storage.uploads, `${project.document.hash}.pdf`))).toBe(true);
+  });
+
+  it('answers 413 (not 500) for a JSON body over the size limit', async () => {
+    const res = await call<ErrorBody>('PATCH', `/projects/${project.id}/settings`, json({ padding: 'x'.repeat(200_000) }));
+    expect(res.status).toBe(413);
+    expect(res.body.error).toMatchObject({ code: 'HTTP_413', message: 'The request is too large.', retryable: false });
+  });
+
   it('rejects invalid settings on PATCH with 400 { error: { code, message } } and keeps the old settings', async () => {
     const bad = await call<ErrorBody>('PATCH', `/projects/${project.id}/settings`, json({ video: { fps: 500, highlightColor: 'yellow' } }));
     expect(bad.status).toBe(400);
@@ -275,6 +296,15 @@ describe.skipIf(!canRun)('API integration (live server)', () => {
     for (const name of ['.env', 'manifest..json%2F..%2F..%2Fpackage.json', '..%2F..%2Fpackage.json']) {
       const res = await call<ErrorBody>('GET', `/projects/${project.id}/output/${name}`);
       expect(res.status).toBe(404);
+    }
+  });
+
+  it('rejects path traversal through the project id', async () => {
+    // storage/output/../../package.json = the repo's package.json; ../../../../../../etc/hosts
+    for (const url of ['/projects/..%2F../output/package.json', '/projects/..%2F..%2F..%2F..%2F..%2F..%2Fetc/output/hosts', '/projects/..%2F../output']) {
+      const res = await call<ErrorBody>('GET', url);
+      expect(res.status, url).toBe(404);
+      expect(JSON.stringify(res.body)).not.toContain('pdf-audiobook');
     }
   });
 

@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, type Document, type JobStatus, type Project } from '@prisma/client';
-import { CachePaths, cleanProjectCache, deleteProjectFiles, type OutputRecord } from '@app/pipeline';
+import { CachePaths, cleanProjectCache, deleteProjectFiles, type OutputRecord, type ProjectManifest } from '@app/pipeline';
 import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
 import {
   ASPECT_SIZES,
@@ -25,6 +25,8 @@ import { PythonService } from '../system/python.service';
 import { settingsSchema } from './settings.schema';
 
 const ACTIVE: JobStatus[] = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
+/** Project ids are UUIDs; anything with dots or slashes (e.g. "..%2F..") must never reach a file path. */
+const SAFE_ID = /^[a-z0-9-]+$/i;
 type ProjectWithDoc = Project & { document: Document };
 
 @Injectable()
@@ -217,8 +219,13 @@ export class ProjectsService {
     return { ...s, status: p.status, progress: p.progress };
   }
 
+  private outputDir(id: string, what = 'File'): string {
+    if (!SAFE_ID.test(id)) throw notFound(what);
+    return this.paths.output(id);
+  }
+
   async outputs(id: string): Promise<OutputFile[]> {
-    const dir = this.paths.output(id);
+    const dir = this.outputDir(id, 'Project');
     const out: OutputFile[] = [];
     const known: [string, OutputFile['kind']][] = [
       ['audiobook.mp4', 'video'],
@@ -235,7 +242,7 @@ export class ProjectsService {
 
   outputPath(id: string, name: string): string {
     if (!/^[a-z0-9._-]+$/i.test(name) || name.startsWith('.')) throw notFound('File');
-    return path.join(this.paths.output(id), name);
+    return path.join(this.outputDir(id), name);
   }
 
   async timelinePath(id: string): Promise<string> {
@@ -308,16 +315,25 @@ export class ProjectsService {
 
   async cancel(id: string) {
     const p = await this.get(id);
-    if (p.status === 'PENDING') {
-      await this.prisma.renderJob.updateMany({ where: { projectId: id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+    // Still queued: cancel the run itself. Conditional, so it is atomic with the worker claiming the
+    // run (PENDING → EXTRACTING): whichever lands first wins and a cancelled run is never started.
+    const queued = await this.prisma.renderJob.updateMany({ where: { projectId: id, status: 'PENDING' }, data: { status: 'CANCELLED', finishedAt: new Date() } });
+    if (queued.count > 0) {
+      const snapshot = { ...((p.snapshot as object) ?? {}), status: 'CANCELLED', message: 'Processing was cancelled.', updatedAt: new Date().toISOString() };
+      await this.prisma.project.update({ where: { id }, data: { cancelRequested: true, status: 'CANCELLED', snapshot: snapshot as Prisma.InputJsonValue } });
+    } else {
+      // Running (or claimed but not reported yet): the worker polls this flag and stops within ~2 s.
+      await this.prisma.project.update({ where: { id }, data: { cancelRequested: true } });
     }
-    await this.prisma.project.update({ where: { id }, data: { cancelRequested: true, ...(p.status === 'PENDING' ? { status: 'CANCELLED' } : {}) } });
     return { ok: true };
   }
 
   async cleanCache(id: string) {
     const p = await this.get(id);
     if (ACTIVE.includes(p.status)) throw conflict('Stop processing before cleaning the cache.');
+    // Extraction, page renders and (same voice) chapter audio are shared by every project made from this PDF.
+    const busy = await this.prisma.project.count({ where: { documentId: p.documentId, NOT: { id }, status: { in: ACTIVE } } });
+    if (busy) throw conflict('Another project made from this PDF is processing and uses the same cache. Try again when it has finished.');
     const freedBytes = await cleanProjectCache(this.cfg, id, p.document.hash);
     await this.prisma.processingStep.deleteMany({ where: { projectId: id } });
     await this.prisma.project.update({ where: { id }, data: { analysisKey: null } });
@@ -327,15 +343,37 @@ export class ProjectsService {
   async remove(id: string, deleteOutputs: boolean) {
     const p = await this.get(id);
     if (ACTIVE.includes(p.status)) throw conflict('Stop processing before deleting the project.');
-    const others = await this.prisma.project.count({ where: { documentId: p.documentId, NOT: { id } } });
-    await deleteProjectFiles(this.cfg, id, p.document.hash, { deleteOutputs, deleteUpload: others === 0 });
+    const siblings = await this.prisma.project.findMany({ where: { documentId: p.documentId, NOT: { id } }, select: { id: true } });
+    if (siblings.length === 0) await deleteProjectFiles(this.cfg, id, p.document.hash, { deleteOutputs, deleteUpload: true });
+    else await this.deleteUnsharedFiles(id, deleteOutputs);
     await this.prisma.project.delete({ where: { id } });
-    if (others === 0) await this.prisma.document.delete({ where: { id: p.documentId } }).catch(() => undefined);
+    if (siblings.length === 0) await this.prisma.document.delete({ where: { id: p.documentId } }).catch(() => undefined);
     return { ok: true, outputsKept: !deleteOutputs };
   }
 
+  /**
+   * Other projects still use this PDF (the DB knows, even before they wrote a manifest): keep its
+   * hash-keyed caches (extraction, page renders, previews) and any chapter audio / video segment
+   * another project's manifest references. Only files that belong to this project alone go.
+   */
+  private async deleteUnsharedFiles(id: string, deleteOutputs: boolean) {
+    const read = (pid: string) => readJsonIfExists<ProjectManifest>(path.join(this.paths.output(pid), 'manifest.json')).catch(() => undefined);
+    const mine = await read(id);
+    const shared = new Set<string>();
+    for (const other of await fsp.readdir(this.cfg.storage.output).catch(() => [] as string[])) {
+      if (other === id) continue;
+      const m = await read(other);
+      for (const k of [...(m?.audioKeys ?? []), ...(m?.videoKeys ?? [])]) shared.add(k);
+    }
+    const targets: string[] = [this.paths.work(id)];
+    for (const k of mine?.audioKeys ?? []) if (!shared.has(k)) targets.push(this.paths.chapterAudio(k).audio, this.paths.chapterAudio(k).meta);
+    for (const k of mine?.videoKeys ?? []) if (!shared.has(k)) targets.push(this.paths.videoSegment(k));
+    if (deleteOutputs) targets.push(this.paths.output(id));
+    for (const t of targets) await fsp.rm(t, { recursive: true, force: true });
+  }
+
   async manifest(id: string) {
-    return readJsonIfExists<OutputRecord[]>(path.join(this.paths.output(id), 'manifest.json'));
+    return readJsonIfExists<OutputRecord[]>(path.join(this.outputDir(id), 'manifest.json'));
   }
 }
 

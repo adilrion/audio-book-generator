@@ -19,6 +19,11 @@ def _clamped_matrix(page: fitz.Page, scale: float) -> fitz.Matrix:
     return fitz.Matrix(scale, scale)
 
 
+def effective_scale(page: fitz.Page, scale: float) -> float:
+    """The pixels-per-point a page is actually rendered at for a requested scale (after the MAX_PIXELS cap)."""
+    return _clamped_matrix(page, scale).a
+
+
 def render_page(doc: fitz.Document, page_no: int, scale: float, out_path: str) -> dict:
     page = doc[page_no - 1]
     m = _clamped_matrix(page, scale)
