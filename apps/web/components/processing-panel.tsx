@@ -119,7 +119,9 @@ export function ProcessingPanel({ project }: { project: ProjectDetail }) {
         ? 'Stopped with an error'
         : phase === 'cancelled'
           ? 'Cancelled'
-          : phase === 'queued'
+          : phase === 'review'
+            ? 'Waiting for your chapter review'
+            : phase === 'queued'
             ? 'Queued'
             : phase === 'idle'
               ? 'Not started yet'
@@ -150,8 +152,10 @@ export function ProcessingPanel({ project }: { project: ProjectDetail }) {
                       ? cachedSteps
                         ? `${cachedSteps} step${cachedSteps === 1 ? '' : 's'} reused from cache.`
                         : 'All stages complete.'
-                      : phase === 'cancelled'
-                        ? 'Finished steps are kept — Resume continues where it stopped.'
+                      : phase === 'review'
+                        ? 'The PDF is analysed. Check the chapter list above, then start narration.'
+                        : phase === 'cancelled'
+                          ? 'Finished steps are kept — Resume continues where it stopped.'
                         : 'Finished steps are kept — retrying continues from the failed step.'}
             </p>
           </div>
@@ -160,7 +164,7 @@ export function ProcessingPanel({ project }: { project: ProjectDetail }) {
         <Progress
           value={progress}
           className="h-2.5"
-          indicatorClassName={cn(phase === 'completed' && 'bg-success', phase === 'failed' && 'bg-destructive', phase === 'cancelled' && 'bg-muted-foreground/50', phase === 'active' && 'bg-info')}
+          indicatorClassName={cn(phase === 'completed' && 'bg-success', phase === 'failed' && 'bg-destructive', phase === 'cancelled' && 'bg-muted-foreground/50', phase === 'review' && 'bg-warning', phase === 'active' && 'bg-info')}
         />
       </div>
 

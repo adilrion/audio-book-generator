@@ -62,6 +62,8 @@ export interface CleaningReport {
   dehyphenated: number;
   removedDuplicates: number;
   removedTocLines: number;
+  /** Opening words whose drop-cap letter was an image, restored from the book's vocabulary ("OT" → "Not"). */
+  restoredDropCaps?: number;
   bodyFontSize: number;
 }
 

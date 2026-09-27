@@ -24,6 +24,26 @@ export interface TextSettings {
   ocr: OcrMode;
   /** Drop content before the first detected chapter (copyright page, TOC...). */
   skipFrontMatter: boolean;
+  /** Leave out trailing back matter: licence text, index, "about the author", "also by"... */
+  skipBackMatter: boolean;
+  /** Pause after chapter detection so the chapter list can be reviewed before narration. */
+  reviewChapters: boolean;
+  /** The reviewed chapter list. Only applies to the analysis it was made for. */
+  chapterEdits?: ChapterEdits;
+}
+
+export interface ChapterEdit {
+  /** 0-based chapter index from the analysis */
+  index: number;
+  title?: string;
+  exclude?: boolean;
+  /** Append this chapter's text to the previous kept chapter. */
+  mergeWithPrevious?: boolean;
+}
+
+export interface ChapterEdits {
+  analysisKey: string;
+  items: ChapterEdit[];
 }
 
 export interface AudioSettings {
@@ -71,7 +91,7 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   outputMode: 'audiobook_video',
   language: 'en',
   tts: { engine: 'kokoro', voice: 'af_heart', speed: 1.0 },
-  text: { useLlm: true, ocr: 'auto', skipFrontMatter: false },
+  text: { useLlm: true, ocr: 'auto', skipFrontMatter: false, skipBackMatter: true, reviewChapters: false },
   audio: { sentencePauseMs: 280, paragraphPauseMs: 650, chapterPauseMs: 1800, normalize: true },
   video: {
     aspectRatio: '16:9',

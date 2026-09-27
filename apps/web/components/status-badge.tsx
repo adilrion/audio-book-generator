@@ -1,5 +1,5 @@
 import type { JobStatus } from '@app/types';
-import { Ban, CircleCheck, CircleX, Clock, LoaderCircle } from 'lucide-react';
+import { Ban, CircleCheck, CircleX, Clock, ListChecks, LoaderCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { isActive, STATUS_LABELS } from '@/lib/stages';
 
@@ -14,6 +14,12 @@ export function StatusBadge({ status, queued, className }: { status: JobStatus; 
     return (
       <Badge variant="destructive" className={className}>
         <CircleX aria-hidden /> Failed
+      </Badge>
+    );
+  if (status === 'AWAITING_REVIEW')
+    return (
+      <Badge variant="warning" className={className}>
+        <ListChecks aria-hidden /> Review chapters
       </Badge>
     );
   if (status === 'CANCELLED')

@@ -11,6 +11,7 @@ export const STATUS_LABELS: Record<JobStatus, string> = {
   EXTRACTING: 'Reading PDF',
   CLEANING: 'Cleaning text',
   ANALYZING: 'Detecting chapters',
+  AWAITING_REVIEW: 'Review chapters',
   GENERATING_AUDIO: 'Generating audio',
   PREPARING_VIDEO: 'Preparing video',
   RENDERING: 'Rendering',
@@ -41,7 +42,7 @@ export interface StageRow {
 }
 
 /** Lifecycle phase of a project as the UI sees it. */
-export type Phase = 'idle' | 'queued' | 'active' | 'completed' | 'failed' | 'cancelled';
+export type Phase = 'idle' | 'queued' | 'active' | 'review' | 'completed' | 'failed' | 'cancelled';
 
 export function projectPhase(p: Pick<ProjectDetail, 'status' | 'steps' | 'snapshot'>): Phase {
   switch (p.status) {
@@ -51,6 +52,8 @@ export function projectPhase(p: Pick<ProjectDetail, 'status' | 'steps' | 'snapsh
       return 'failed';
     case 'CANCELLED':
       return 'cancelled';
+    case 'AWAITING_REVIEW':
+      return 'review';
     case 'PENDING':
       // A fresh upload has no snapshot message; POST /process sets "Waiting for the worker…".
       return p.snapshot?.message ? 'queued' : 'idle';

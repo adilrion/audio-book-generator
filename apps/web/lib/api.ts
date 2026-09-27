@@ -1,4 +1,6 @@
 import type {
+  ChapterEdit,
+  ChapterSummary,
   HealthReport,
   OutputFile,
   ProgressSnapshot,
@@ -146,6 +148,9 @@ export const api = {
   process: (id: string) => request<{ jobId: string }>(`/projects/${encodeURIComponent(id)}/process`, { method: 'POST' }),
   retry: (id: string) => request<{ jobId: string }>(`/projects/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
   restart: (id: string) => request<{ jobId: string }>(`/projects/${encodeURIComponent(id)}/restart`, { method: 'POST' }),
+  chapters: (id: string, signal?: AbortSignal) => request<ChapterSummary[]>(`/projects/${encodeURIComponent(id)}/chapters`, { signal }),
+  reviewChapters: (id: string, body: { items: ChapterEdit[]; start?: boolean }) =>
+    request<{ jobId?: string }>(`/projects/${encodeURIComponent(id)}/chapters/review`, json('POST', body)),
   cancel: (id: string) => request<{ ok: boolean }>(`/projects/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   cleanCache: (id: string) => request<{ freedBytes: number }>(`/projects/${encodeURIComponent(id)}/cache`, { method: 'DELETE' }),
   deleteProject: (id: string, deleteOutputs: boolean) =>

@@ -61,8 +61,14 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   rules. The printed text is never rewritten. Only what the voice *says* is normalized
   (`e.g.` → "for example", footnote markers are dropped, and so on).
 - **Chapter detection in a fixed order:** PDF outline, then textual patterns (`Chapter 3`, `PART ONE`,
-  `Prologue`), then heading font sizes, then the local LLM (only for ambiguous structure), then about
-  12-page sections as a fallback.
+  `Prologue`, and bare chapter labels set in body text), then heading font sizes, then the local LLM
+  (only for ambiguous structure), then about 12-page sections as a fallback.
+- **Chapter review before narration.** New projects pause after chapter detection (status
+  `AWAITING_REVIEW`) so you can untick, rename or merge chapters before hours of narration start.
+  Back matter (licence text, index, "about the author") starts unticked and is skipped by default.
+- **Decorative initials repaired.** When a chapter's drop-cap letter is an image, the missing letter
+  is restored from the book's own vocabulary and word pairs ("OT all that" → "Not all that",
+  "HE ladies" → "The ladies", "R. BENNET" → "MR. BENNET").
 - **Local LLM used sparingly.** [Ollama](https://ollama.com) (`qwen3:4b` by default) is only asked
   small structured-JSON questions: which heading candidates start chapters, how to repair visibly
   damaged sentences, and (opt-in) how to pronounce names. It never sees the whole book, and nothing
@@ -82,7 +88,9 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   at once. Python model processes are shut down between stages to give memory back. Audio and video
   are streamed to disk and never held in RAM.
 - **Understandable errors.** Users see "Audio generation failed for Chapter 7. Retry to continue from
-  Chapter 7" instead of `ECONNREFUSED 127.0.0.1:6379`. Technical details go to the logs.
+  Chapter 7" instead of `ECONNREFUSED 127.0.0.1:6379`. Technical details go to the logs. If a Python
+  process dies mid-chapter (for example under memory pressure), that chapter is retried once
+  automatically before anything is reported.
 - **Three ways to use it:** a Next.js dashboard, a NestJS HTTP API with a BullMQ job queue, and a CLI
   that needs no database or Redis.
 
@@ -500,7 +508,14 @@ Run `pnpm dev` (or `pnpm dev:web` while the API and the worker are running) and 
   are pre-filled with the server defaults: output (video or audio only), voice engine, voice,
   language and speed, video format (16:9, 9:16, 1:1), animation, highlight unit, style and colour,
   background theme, progress bar, chapter title, embedded subtitles, and the text options (local
-  AI, skip front matter, chapter range, OCR).
+  AI, skip front matter, skip back matter, review chapters before narration (on by default in the
+  UI), chapter range, OCR).
+- **Chapter review** (on the project page while the status is `AWAITING_REVIEW`, or via
+  **Review chapters** afterwards): every detected chapter with its pages, word count and first
+  words; tick or untick it, fix its title, or merge it into the previous chapter. The header shows
+  the kept word count and an estimate of the narration length (≈ 175 words/min at speed 1.0).
+  **Narrate N chapters** saves the list and starts processing; later changes re-narrate only the
+  chapters they affect.
 - **Project page** (`/projects/<id>`): live progress per stage and per chapter; plain-language
   errors with the matching retry action; Resume, Retry, Cancel, Restart, Clean project cache and
   Delete project; the settings, which list the stages a change will redo before you save; a
@@ -554,6 +569,7 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 | `--theme` | `paper` \| `light` \| `dark` (`paper`) | Background and title-card colors |
 | `--chapters <a-b>` | e.g. `3` or `1-4` | Narrate only these chapters (1-based, as numbered after detection, including "Opening Pages") |
 | `--skip-front-matter` | off | Skip content before the first chapter (copyright page, table of contents, …) |
+| `--keep-back-matter` | off | Also narrate trailing back matter (licence text, index, "about the author", "also by"), which is skipped by default |
 | `--no-llm` | off | Don't use Ollama for this run |
 | `--ocr` | `auto` \| `off` \| `force` (`auto`) | `auto` OCRs pages that have images but fewer than 20 characters of text |
 | `--password <pw>` | | Password for an encrypted PDF (CLI only, see [troubleshooting](#password-protected-pdf)) |
@@ -630,6 +646,8 @@ enqueues a job.
 | `POST /projects/:id/process` | | `{ jobId }`: start or resume. `409` if the project is already queued or processing, `410` if the uploaded PDF is gone. |
 | `POST /projects/:id/retry` | | `{ jobId }`: same as resume, since finished steps are cached |
 | `POST /projects/:id/restart` | | `{ jobId }`: ignore caches and redo everything |
+| `GET /projects/:id/chapters` | | `ChapterSummary[]`: index, title, pages, `matter` (`front`/`back`), `preview` (first words), `wordCount`, `durationSec` |
+| `POST /projects/:id/chapters/review` | `{ items: [{ index, exclude?, title?, mergeWithPrevious? }], start?: boolean }` | `{ jobId }` (or `{}` with `start: false`). Saves the reviewed list for the current analysis (`settings.text.chapterEdits`) and starts narration. `400` for unknown chapters or when every chapter is excluded, `409` while processing or before chapters are detected. |
 | `POST /projects/:id/cancel` | | `{ ok: true }`. A queued job is cancelled at once; a running one stops within ~1.5 s and finished chapters are kept. |
 | `GET /projects/:id/status` | | `ProgressSnapshot` `{status, progress, stage, message, currentChapter, totalChapters, warnings, error}` |
 | `GET /projects/:id/steps` | | `StepRecord[]` (`EXTRACT`, `CLEAN`, `ANALYZE`, `TTS_CHAPTER_n`, `AUDIO_MERGE`, `TIMELINE`, `VIDEO_CHAPTER_n`, `MUX`) |
@@ -681,14 +699,15 @@ curl -s -o audiobook.mp4 http://localhost:4000/projects/$ID/output/audiobook.mp4
 |---|---|---|---|---|
 | 1 | `EXTRACT` | `EXTRACTING` | `EXTRACT` | PyMuPDF streams every page into `pages.jsonl` (words + boxes + font info). OCR runs for pages that have images but almost no text, if Tesseract is available. |
 | 2 | `CLEAN` | `CLEANING` | `CLEAN` | Removes headers/footers, page numbers, TOC leaders and duplicates |
-| 3 | `ANALYZE` | `ANALYZING` | `ANALYZE` | Paragraphs, de-hyphenation, chapters, sentences, highlight regions, narration text; the LLM when needed |
+| 3 | `ANALYZE` | `ANALYZING` | `ANALYZE` | Paragraphs, de-hyphenation, drop-cap repair, chapters, sentences, highlight regions, narration text; the LLM when needed |
+| – | review | `AWAITING_REVIEW` | – | Only with `text.reviewChapters`: the run stops here until `POST /chapters/review` (the run's render job ends as `AWAITING_REVIEW`). The chapter plan (review edits, back-matter skip, chapter range) is then applied before TTS. |
 | 4 | `TTS` | `GENERATING_AUDIO` | `TTS_CHAPTER_1…n` | One FLAC per chapter with exact sentence timings (parallel up to `MAX_CONCURRENT_TTS`) |
 | 5 | `AUDIO_MERGE` | `GENERATING_AUDIO` | `AUDIO_MERGE` | Concatenate, `loudnorm` to −16 LUFS (optional), 48 kHz mono AAC with chapter markers → `audiobook.m4a` |
 | 6 | `TIMELINE` | `PREPARING_VIDEO` | `TIMELINE` | Global timeline, cross-page splits → `timeline.json`, `subtitles.srt`, `chapters.txt` |
 | 7 | `VIDEO` | `RENDERING` | `VIDEO_CHAPTER_1…n` | Rasterize pages at the needed scale, composite frames, VideoToolbox → one video-only MP4 per chapter |
 | 8 | `MUX` | `RENDERING` | `MUX` | Stream-copy concat + AAC + soft `mov_text` subtitles + chapters → `audiobook.mp4`, then an A/V sync check |
 
-Other project statuses: `PENDING` (queued), `COMPLETED`, `FAILED` (with a user-facing `error`) and
+Other project statuses: `PENDING` (queued), `AWAITING_REVIEW`, `COMPLETED`, `FAILED` (with a user-facing `error`) and
 `CANCELLED`. Step statuses: `PENDING`, `RUNNING`, `COMPLETED` (with `cached: true` when reused),
 `FAILED` and `SKIPPED`. "Audiobook only" mode has no `VIDEO` and `MUX` steps. The overall
 percentage is weighted by typical cost (TTS 55 %, video 28 %, the rest 2–4 % each) and rescaled to
@@ -707,6 +726,10 @@ the stages that actually run. Stage internals (heuristics, timing math, camera) 
 - **Crash or reboot**: when the worker starts, it marks projects that were left "running" as
   `FAILED` with `INTERRUPTED` ("Processing was interrupted before it finished. Click Resume…").
   Nothing is lost except the chapter that was in progress.
+- **Worker process crash**: if a Python process dies during a chapter (crash, macOS memory
+  pressure, a stuck call hitting its timeout), the pool starts a new one and the chapter is retried
+  once; a warning is shown. A second failure of the same chapter stops the run with the usual
+  "failed for Chapter N" message.
 - Artifacts are written atomically (temp file + rename), so a half-written file is never mistaken
   for a finished one.
 
@@ -723,7 +746,7 @@ Each stage's cache key is a hash of exactly the inputs that affect its output:
 | Embedded subtitles on/off | `MUX` only (same picture reuse) |
 | LLM on/off (including Ollama becoming unreachable or reachable again), `OLLAMA_MODEL`, skip front matter, `LLM_PRONUNCIATION` | `CLEAN` + `ANALYZE`, then TTS only for chapters whose narration changed. Sentence ids are positional (`c3-p12-s1`), so a change that shifts chapter numbering, such as dropping the "Opening Pages" chapter, re-narrates the chapters after it. |
 | Book title (the project name in the API, the PDF file name in the CLI) | `CLEAN` + `ANALYZE` (seconds), audio master, timeline and a re-mux; chapter audio and the picture are reused |
-| Chapter range | Already-narrated chapters are reused; audio master, timeline and video are rebuilt because chapter start times shift |
+| Chapter range, chapter review (exclude / rename / merge), skip back matter | Chapters whose text is unchanged are reused; a merged chapter is narrated again as one; audio master, timeline and video are rebuilt because chapter start times shift. Analysis is not redone. |
 | OCR mode or language | `EXTRACT` and everything after it |
 | Nothing (a new project from the same PDF) | Extraction and chapter audio are shared through the content-addressed cache, and so is the analysis when the project has the same name |
 
@@ -806,8 +829,12 @@ Voice ids are engine-specific. List them with `node apps/cli/dist/main.js voices
 
 #### Scanned PDF ("This PDF is a scan (images only)…")
 Install Tesseract (`brew install tesseract`) and keep OCR at `auto` (or use `force`). For Bangla OCR,
-also run `brew install tesseract-lang`. OCR runs at 200 dpi and is slow compared to text extraction.
-The API refuses an obviously scanned PDF if `text.ocr` is `off`.
+also run `brew install tesseract-lang`. OCR runs at 200 dpi and is slow compared to text extraction:
+about 1.4 s per page on the M4 (a 280-page scan ≈ 7 min). Measured on 6 pages of *Pride and
+Prejudice* rasterized to 200 dpi grey images with no text layer: 98.5 % of the OCR words match the
+printed text exactly and every chapter was still found. Typical Tesseract slips are an opening `“I`
+read as `“T` and a missing space between two words. Turn on the local LLM to repair the worst
+sentences. The API refuses an obviously scanned PDF if `text.ocr` is `off`.
 
 #### Password-protected PDF
 The API rejects encrypted PDFs (`PDF_PASSWORD`, "Remove the password and upload it again"). Either
@@ -1055,10 +1082,20 @@ pnpm test:py     # pytest: workers/processing/tests
   TTS): produces a synced MP4/M4A/SRT, resumes without redoing work, theme change re-renders video
   only, a failed chapter keeps finished chapters and retry continues. It is skipped automatically
   when the venv or FFmpeg is missing.
+- **Real-book regressions** (`text-chapter-markers.test.ts`, `text-openings-plan.test.ts`): body-size
+  chapter labels, contents pages of bare markers, roman numerals in narration, drop-cap letters
+  restored from word pairs, back-matter skipping, review edits and the chapter range.
+- **Runner** (`runner-*.test.ts`): resume, cancel, cache keys, cleanup, progress, the chapter-review
+  pause and continue, and a retry after a Python worker crash.
 - **API** (`apps/api/test`): error mapping and filter, settings schema, queue behaviour when Redis
-  is down, Prisma store, project service, system controller.
+  is down, Prisma store, project service, chapter review endpoint, system controller, and a live
+  end-to-end suite against a running API (skipped when none is running).
+- **Web** (`apps/web/test`): stage aggregation, timeline search, highlight scaling, settings diffs,
+  chapter-review defaults and edits.
+- **CI**: `.github/workflows/ci.yml` runs builds, the TypeScript suites and pytest on a macOS
+  (Apple Silicon) runner, with libx264 instead of VideoToolbox.
 - **Python** (`workers/processing/tests`): PDF inspect/extract with boxes, corrupt/empty/password/
-  image-only PDFs, page rendering, sample-accurate chapter TTS timings, TTS retry, silence trimming,
+  image-only PDFs, OCR of a real scanned page (skipped without Tesseract), page rendering, sample-accurate chapter TTS timings, TTS retry, silence trimming,
   camera dead zone and pans, page runs, highlight fades, frame counts, on-demand page rasterization.
 
 AI output is never asserted deterministically. The LLM and TTS are mocked or faked behind their

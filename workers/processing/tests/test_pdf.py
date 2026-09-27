@@ -90,3 +90,33 @@ def test_render_pages(sample_pdf, tmp_path):
     assert len(res["pages"]) == 2
     assert (tmp_path / "page-0001.png").exists()
     assert abs(res["pages"][0]["scale"] - 1.5) < 1e-6
+
+
+@pytest.mark.skipif(not __import__("audiobook_worker.pdf.extract", fromlist=["x"]).tesseract_available(), reason="tesseract not installed")
+def test_scanned_pdf_is_read_with_ocr(tmp_path):
+    # Render real text, keep only the picture: a page with no text layer at all.
+    src = fitz.open()
+    page = src.new_page(width=432, height=648)
+    page.insert_text((54, 120), "Chapter One", fontsize=20)
+    page.insert_textbox(fitz.Rect(54, 150, 378, 400), "The Industrial Revolution began in Britain in the late eighteenth century. "
+                        "It changed the way people worked, travelled and lived.", fontsize=12)
+    pix = page.get_pixmap(dpi=200, colorspace=fitz.csGRAY)
+    scan = fitz.open()
+    sp = scan.new_page(width=432, height=648)
+    sp.insert_image(sp.rect, pixmap=pix)
+    path = tmp_path / "scan.pdf"
+    scan.save(str(path))
+    assert scan[0].get_text().strip() == ""
+
+    meta = extract(str(path), str(tmp_path / "out"), "h", ocr="auto")
+    assert meta["ocrPages"] == [1]
+    p = json.loads(open(tmp_path / "out" / "pages.jsonl").readline())
+    assert p.get("ocr") is True
+    words = [w for b in p["blocks"] for ln in b["lines"] for w in ln["words"]]
+    text = " ".join(w["t"] for w in words)
+    assert "Industrial" in text and "Revolution" in text and "eighteenth" in text
+    for w in words:  # OCR boxes are in page points, like the text layer
+        x0, y0, x1, y1 = w["b"]
+        assert 0 <= x0 < x1 <= 433 and 0 <= y0 < y1 <= 649
+    word = next(w for w in words if w["t"].startswith("Industrial"))
+    assert 140 < word["b"][1] < 200  # printed around y=150–170

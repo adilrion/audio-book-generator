@@ -1,10 +1,11 @@
 'use client';
 
 import type { ProjectDetail } from '@app/types';
-import { ArrowLeft, CircleCheck, Film, Headphones, Info, X } from 'lucide-react';
+import { ArrowLeft, CircleCheck, Film, Headphones, Info, ListChecks, X } from 'lucide-react';
 import Link from 'next/link';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
+import { ChapterReview } from '@/components/chapter-review';
 import { ChaptersList } from '@/components/chapters-list';
 import { OutputsList } from '@/components/outputs-list';
 import { ProcessingPanel } from '@/components/processing-panel';
@@ -73,6 +74,7 @@ export function ProjectView({ id, initialTime }: { id: string; initialTime?: num
   const project = useApi(`project:${id}`, (signal) => api.project(id, signal), { interval: pollMs });
   const config = useApi('config', (signal) => api.config(signal));
   const [notice, setNotice] = useState<string>();
+  const [editingChapters, setEditingChapters] = useState(false);
 
   const p = project.data;
   const phase = p ? projectPhase(p) : undefined;
@@ -221,6 +223,19 @@ export function ProjectView({ id, initialTime }: { id: string; initialTime?: num
 
       <ProjectActions project={p} onChanged={() => onChanged()} onNotice={setNotice} />
 
+      {(phase === 'review' || editingChapters) && (
+        <ChapterReview
+          key={p.analysisKey}
+          project={p}
+          onClose={phase === 'review' ? undefined : () => setEditingChapters(false)}
+          onStarted={() => {
+            setEditingChapters(false);
+            setNotice('Narration started with the reviewed chapter list.');
+            onChanged();
+          }}
+        />
+      )}
+
       {showPreviewFirst && previewCard}
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -246,6 +261,11 @@ export function ProjectView({ id, initialTime }: { id: string; initialTime?: num
             <CardHeader>
               <CardTitle>Chapters</CardTitle>
               <CardDescription>Detected from the table of contents, headings and patterns.</CardDescription>
+              {p.analysisKey && !editingChapters && (phase === 'completed' || phase === 'failed' || phase === 'cancelled') && (
+                <Button size="sm" variant="outline" className="mt-2 w-fit" onClick={() => setEditingChapters(true)}>
+                  <ListChecks aria-hidden /> Review chapters
+                </Button>
+              )}
             </CardHeader>
             <div className="border-t">
               <ChaptersList chapters={p.chapters} emptyText={phase === 'idle' || phase === 'queued' ? 'Chapters appear after the PDF is analysed.' : 'No chapters yet.'} />

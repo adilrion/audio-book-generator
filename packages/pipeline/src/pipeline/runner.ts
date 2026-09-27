@@ -43,6 +43,7 @@ import { OllamaProvider } from '../llm/ollama';
 import type { LLMProvider } from '../llm/provider';
 import { PythonPool } from '../python/bridge';
 import { ANALYZER_VERSION, analyzeCleaned, cleanDocument } from '../text/analyze';
+import { planChapters, plannedAnalysis } from '../text/plan';
 import { buildTimeline } from '../timeline/build';
 import { buildCues, toSrt, youtubeChapters } from '../timeline/subtitles';
 import { createTTSProvider } from '../tts/registry';
@@ -82,8 +83,12 @@ export interface PipelineResult {
   outputs: OutputRecord[];
   durationSec: number;
   analysis: Analysis;
-  timeline: Timeline;
+  /** Absent when the run paused for chapter review. */
+  timeline?: Timeline;
   warnings: string[];
+  /** Stopped after chapter detection because settings.text.reviewChapters is on. */
+  awaitingReview?: boolean;
+  analysisKey?: string;
 }
 
 const chapterLabel = (c: Chapter) => `Chapter ${c.index + 1}`;
@@ -350,8 +355,19 @@ export class PipelineRunner {
       await this.store.saveAnalysis(analysis, analysisKey);
       this.setStage('ANALYZE', 1, `${analysis.chapters.length} chapters found`, { totalChapters: analysis.chapters.length });
 
-      const chapters = this.selectChapters(analysis, s);
-      if (!chapters.length) throw new AppError('NO_CHAPTERS', 'The selected chapter range contains no text.', { retryable: false });
+      // ── Review pause: the user checks the chapter list before hours of narration start ──
+      if (s.text.reviewChapters && s.text.chapterEdits?.analysisKey !== analysisKey) {
+        this.emit({ status: 'AWAITING_REVIEW', stage: undefined, message: 'Review the detected chapters, then continue.', totalChapters: analysis.chapters.length }, true);
+        return { outputs: [], durationSec: 0, analysis, warnings: this.warnings, awaitingReview: true, analysisKey };
+      }
+      const plan = planChapters(analysis, s.text, analysisKey);
+      const chapters = plan.chapters;
+      if (!chapters.length) throw new AppError('NO_CHAPTERS', 'None of the selected chapters contain text to narrate.', { retryable: false, hint: 'Include at least one chapter or widen the chapter range.' });
+      const backMatter = plan.skipped.filter((k) => k.reason === 'back-matter');
+      if (backMatter.length && !this.warnings.some((w) => w.startsWith('Left out back matter')))
+        this.warnings.push(`Left out back matter: ${backMatter.map((k) => k.title).slice(0, 4).join(', ')}${backMatter.length > 4 ? '…' : ''}.`);
+      // Timeline, subtitles and chapter marks describe exactly what is narrated.
+      const narrated = plannedAnalysis(analysis, plan);
 
       // Register every step up-front so the UI shows the whole plan.
       for (const c of chapters) this.defineStep(`TTS_CHAPTER_${c.index + 1}`, 'TTS', c.index);
@@ -378,7 +394,7 @@ export class PipelineRunner {
       const chapterMarks = (() => {
         let t = 0;
         return audios.map((a) => {
-          const c = analysis.chapters[a.chapterIndex];
+          const c = narrated.chapters.find((ch) => ch.index === a.chapterIndex)!;
           const mark = { title: c.title, start: t, end: t + a.samples / a.sampleRate };
           t = mark.end;
           return mark;
@@ -409,15 +425,15 @@ export class PipelineRunner {
       // ── 6. TIMELINE + SUBTITLES ────────────────────────────
       const pageSizes: Record<string, [number, number]> = {};
       meta.pageSizes?.forEach((wh, i) => (pageSizes[String(i + 1)] = wh));
-      const timelineKey = hashKey(analysisKey, manifest.audioKeys, s.video.fps, s.video.highlightMode);
+      const timelineKey = hashKey(analysisKey, manifest.audioKeys, s.video.fps, s.video.highlightMode, chapters.map((c) => c.title));
       const timelineFile = path.join(outDir, 'timeline.json');
       const timeline = await this.step('TIMELINE', 'TIMELINE', async () => {
         if (!this.force && manifest.timelineKey === timelineKey && (await exists(timelineFile)) && (await exists(path.join(outDir, 'subtitles.srt'))))
           return { value: await readJson<Timeline>(timelineFile), cached: true };
         await invalidate('timelineKey');
-        const t = buildTimeline(analysis, audios, { fps: s.video.fps, highlightMode: s.video.highlightMode, pageSizes });
+        const t = buildTimeline(narrated, audios, { fps: s.video.fps, highlightMode: s.video.highlightMode, pageSizes });
         await atomicWriteJson(path.join(outDir, 'timeline.json'), t);
-        await atomicWrite(path.join(outDir, 'subtitles.srt'), toSrt(buildCues(analysis, audios)));
+        await atomicWrite(path.join(outDir, 'subtitles.srt'), toSrt(buildCues(narrated, audios)));
         await atomicWrite(path.join(outDir, 'chapters.txt'), youtubeChapters(t.chapters));
         await this.store.saveTimeline(t);
         manifest.timelineKey = timelineKey;
@@ -503,15 +519,26 @@ export class PipelineRunner {
     }
   }
 
+  /**
+   * One automatic retry when the Python process itself dies (crash, memory pressure, stuck call).
+   * The pool respawns the process, and a chapter is a unit of work, so nothing is left half-done.
+   * A second failure is reported to the user as usual.
+   */
+  private async retryOnCrash<T>(what: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (this.signal?.aborted || !['WORKER_CRASHED', 'OUT_OF_MEMORY', 'WORKER_TIMEOUT'].includes(code ?? '')) throw err;
+      this.log.warn(`${what}: worker failed (${code}); retrying once`, err);
+      if (!this.warnings.some((w) => w.startsWith('A processing worker stopped'))) this.warnings.push('A processing worker stopped unexpectedly and was restarted automatically.');
+      return fn();
+    }
+  }
+
   private orderedSteps(): StepRecord[] {
     const order = (s: StepRecord) => STAGES.indexOf(s.stage) * 10000 + (s.chapterIndex ?? 0);
     return [...this.steps.values()].sort((a, b) => order(a) - order(b));
-  }
-
-  private selectChapters(a: Analysis, s: ProjectSettings): Chapter[] {
-    const r = s.text.chapterRange;
-    if (!r) return a.chapters;
-    return a.chapters.filter((c) => c.index + 1 >= r.from && c.index + 1 <= r.to);
   }
 
   private async makeLlm(s: ProjectSettings): Promise<LLMHelper | undefined> {
@@ -601,7 +628,7 @@ export class PipelineRunner {
           await ensureEngine();
           tick(`Narrating ${label}`, p.c);
           try {
-            const r = await provider.synthesizeSegments(p.segments, {
+            const r = await this.retryOnCrash(`TTS chapter ${p.c.index + 1}`, () => provider.synthesizeSegments(p.segments, {
               voice: s.tts.voice,
               speed: s.tts.speed,
               language: s.language,
@@ -613,7 +640,7 @@ export class PipelineRunner {
                 report(ev.done / ev.total);
                 tick(`Narrating ${label} — sentence ${ev.done}/${ev.total}`, p.c);
               },
-            });
+            }));
             const audio: ChapterAudio = {
               chapterIndex: p.c.index,
               file: r.audioPath,
@@ -708,7 +735,7 @@ export class PipelineRunner {
           }
           let r: { fpsAchieved: number; codec: string };
           try {
-            r = await pool.call<{ fpsAchieved: number; codec: string }>(
+            r = await this.retryOnCrash(`video chapter ${p.tc.index + 1}`, () => pool.call<{ fpsAchieved: number; codec: string }>(
               'video.render_chapter',
               {
                 outPath: p.file,
@@ -739,7 +766,7 @@ export class PipelineRunner {
                   tick(`Rendering chapter ${p.tc.index + 1} — frame ${ev.done.toLocaleString()}/${ev.total.toLocaleString()}`, p.tc.index);
                 },
               },
-            );
+            ));
           } catch (err) {
             const base = toAppError(err);
             // Specific, actionable causes pass through; anything else names the chapter (like TTS).

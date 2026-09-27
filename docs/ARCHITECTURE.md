@@ -14,6 +14,8 @@ File references are given so you can check each claim.
 - [Paragraphs and de-hyphenation](#paragraphs-and-de-hyphenation)
 - [Sentences and narration text](#sentences-and-narration-text)
 - [Chapter detection](#chapter-detection)
+- [Section openings (drop caps)](#section-openings-drop-caps)
+- [Chapter plan and review](#chapter-plan-and-review)
 - [LLM guardrails](#llm-guardrails)
 - [TTS and sample-exact timings](#tts-and-sample-exact-timings)
 - [Timeline math](#timeline-math)
@@ -217,6 +219,62 @@ first one that yields at least two chapters wins:
 Content before the first chapter becomes an **"Opening Pages"** chapter, unless
 `skipFrontMatter` is set, in which case it is dropped along with chapters titled like front
 matter (Contents, Copyright, Dedication, …).
+
+## Section openings (drop caps)
+
+`text/dropcaps.ts`, run on the paragraphs before chapter detection. Books often print a chapter's
+first letter as a decorative image, which is not in the text layer ("OT all that…" for "NOT all
+that…"), and set the rest of the first word in small caps ("IT is a truth…").
+
+- **Where:** only the first word of a body paragraph that opens a section: a heading within the
+  three preceding paragraphs, with only short paragraphs (illustration captions,
+  `[Copyright 1894 …]`) in between. The word must be 1–11 capital letters, optionally with a period
+  or a possessive (`R.`, `LIZABETH’S`).
+- **Evidence:** word counts, and counts of *word → next word* pairs, over the whole book, leaving
+  out every section opening (the suspicious words must not vote for themselves; "LIZABETH" appears
+  at four chapter starts). A trailing period is part of the word, so `R.` becomes "MR." rather than
+  "OR".
+- **Choice:** the printed fragment competes with each letter A–Z in front of it. The winner has the
+  most occurrences before the same next word ("the ladies" beats "he ladies"), then the higher
+  overall frequency. A candidate must occur at least three times elsewhere in the book.
+- **Case:** a run of small caps before a capitalized next word stays capitalized ("MR. BENNET"). If
+  the next word is lowercase, or a name, the word is written in title case ("Not all", "When Jane").
+  A real word is only title-cased when the book also prints it in lowercase, so an acronym like
+  "NATO" is left alone.
+- **Result on *Pride and Prejudice*:** 59 openings repaired. A few ambiguous cases without evidence
+  stay imperfect: "T five o’clock" became "It five" rather than "At five".
+
+The repair changes the token's display text (so subtitles read correctly) but keeps its printed
+rectangle, so the highlight still covers the printed letters.
+
+## Chapter plan and review
+
+`text/plan.ts` turns the detected chapters into what is actually narrated. It is pure, never
+mutates the analysis, and runs after the analysis cache, so none of these settings re-run
+extraction or analysis:
+
+1. **Back matter** (`text.skipBackMatter`, default on): everything after a Project Gutenberg
+   `*** END OF THE PROJECT GUTENBERG EBOOK` paragraph is dropped (even inside the last chapter), then
+   trailing chapters whose titles match `isBackMatterTitle` (index, bibliography, about the author,
+   also by, licence, Gutenberg sections, colophon, …) are removed from the end. "Appendix" and
+   "Epilogue" are content and are kept.
+2. **Review edits** (`text.chapterEdits`, bound to an `analysisKey`): `exclude`, `title`, and
+   `mergeWithPrevious` (the chapter's paragraphs are appended to the previous kept chapter). An
+   explicit `exclude: false` keeps a back-matter chapter. Edits made for another analysis are
+   ignored, so a changed PDF or analyzer asks for a new review.
+3. **Chapter range** (1-based, on the original numbering) last.
+
+Kept chapters keep their original `index`, so step keys (`TTS_CHAPTER_n`), the UI and the
+per-chapter caches stay stable. The timeline, subtitles and M4A/MP4 chapter marks are built from
+the planned chapters.
+
+**Review pause.** With `text.reviewChapters` on (the web UI's default for new projects), the
+runner stops after `ANALYZE` when there are no edits for the current `analysisKey`: it emits
+`AWAITING_REVIEW` and returns `{ awaitingReview: true }`, and the worker records the render job as
+`AWAITING_REVIEW`. The chapters are already in PostgreSQL at that point (`PrismaStore.saveAnalysis`),
+so `GET /projects/:id/chapters` can list them with previews. `POST /projects/:id/chapters/review`
+stores the edits with the current `analysisKey` and enqueues a normal run, which continues from
+cached extraction and analysis.
 
 ## LLM guardrails
 

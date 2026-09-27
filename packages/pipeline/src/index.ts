@@ -7,6 +7,8 @@ export * from './text/chapters';
 export * from './text/regions';
 export * from './text/normalize';
 export * from './text/analyze';
+export * from './text/dropcaps';
+export * from './text/plan';
 export * from './llm/provider';
 export * from './llm/ollama';
 export * from './llm/helper';

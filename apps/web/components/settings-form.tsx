@@ -562,6 +562,18 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
             onCheckedChange={(c) => update((d) => void (d.text.skipFrontMatter = c))}
           />
           <ToggleRow
+            label="Skip back matter"
+            description="Leave out a trailing licence, index, “about the author” or “also by” section."
+            checked={t.skipBackMatter}
+            onCheckedChange={(c) => update((d) => void (d.text.skipBackMatter = c))}
+          />
+          <ToggleRow
+            label="Review chapters before narration"
+            description="Pause after chapter detection so you can untick, rename or merge chapters first."
+            checked={t.reviewChapters}
+            onCheckedChange={(c) => update((d) => void (d.text.reviewChapters = c))}
+          />
+          <ToggleRow
             label="Only narrate some chapters"
             description="Handy for a quick test run before processing the whole book."
             checked={!!range}

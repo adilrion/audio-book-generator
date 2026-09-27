@@ -28,7 +28,12 @@ export function createLogger(scope = 'app', level: Level = (process.env.LOG_LEVE
 
 function safeJson(v: unknown): string {
   try {
-    return JSON.stringify(v, (_k, val) => (val instanceof Error ? { name: val.name, message: val.message, stack: val.stack } : val));
+    // Errors keep their code, details (e.g. a crashed worker's exit code, signal and stderr) and cause chain.
+    return JSON.stringify(v, (_k, val) => {
+      if (!(val instanceof Error)) return val;
+      const e = val as Error & { code?: unknown; details?: unknown; cause?: unknown };
+      return { name: e.name, message: e.message, code: e.code, details: e.details, cause: e.cause, stack: e.stack };
+    });
   } catch {
     return String(v);
   }

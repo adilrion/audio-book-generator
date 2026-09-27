@@ -118,7 +118,9 @@ function FileCard({ upload, speed, onReset }: { upload: Exclude<Upload, { state:
 export function NewProject() {
   const router = useRouter();
   const config = useApi('config', (signal) => api.config(signal));
-  const [settings, setSettings] = useState<ProjectSettings>(() => cloneSettings(DEFAULT_SETTINGS));
+  // New books pause for a chapter review by default: a wrong chapter list is cheap to fix before narration.
+  const withReview = (s: ProjectSettings) => ({ ...s, text: { ...s.text, reviewChapters: true } });
+  const [settings, setSettings] = useState<ProjectSettings>(() => withReview(cloneSettings(DEFAULT_SETTINGS)));
   const touched = useRef(false);
   const [upload, setUpload] = useState<Upload>({ state: 'idle' });
   const handle = useRef<UploadHandle | null>(null);
@@ -128,7 +130,7 @@ export function NewProject() {
 
   // Server defaults (engine/voice come from the API's .env) — unless the user already changed something.
   useEffect(() => {
-    if (config.data && !touched.current) setSettings(cloneSettings(config.data.defaults));
+    if (config.data && !touched.current) setSettings(withReview(cloneSettings(config.data.defaults)));
   }, [config.data]);
 
   useEffect(() => () => handle.current?.abort(), []);

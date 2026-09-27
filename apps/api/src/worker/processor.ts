@@ -148,11 +148,12 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
     try {
       const settings = resolveSettings(project.settings as DeepPartial<ProjectSettings>);
       const runner = new PipelineRunner(this.cfg, new PrismaStore(this.prisma, projectId), createLogger(`project:${projectId.slice(0, 8)}`, this.cfg.LOG_LEVEL));
-      await runner.run(
+      const result = await runner.run(
         { projectId, pdfPath: project.document.filePath, pdfHash: project.document.hash, title: project.name, settings },
         { force, signal: controller.signal },
       );
-      await this.prisma.renderJob.update({ where: { id: renderJobId }, data: { status: 'COMPLETED', finishedAt: new Date() } });
+      // A run that paused for chapter review is finished; the review starts a new one.
+      await this.prisma.renderJob.update({ where: { id: renderJobId }, data: { status: result.awaitingReview ? 'AWAITING_REVIEW' : 'COMPLETED', finishedAt: new Date() } });
     } catch (err) {
       const e = toUserError(err);
       // Stopped by a worker shutdown (Ctrl-C, restart), not by the user: resumable, not "cancelled".

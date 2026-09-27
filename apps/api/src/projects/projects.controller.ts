@@ -84,6 +84,17 @@ export class ProjectsController implements OnModuleInit, OnModuleDestroy {
     return this.projects.cancel(id);
   }
 
+  @Get(':id/chapters')
+  chapters(@Param('id') id: string) {
+    return this.projects.chapters(id);
+  }
+
+  /** Reviewed chapter list (rename / exclude / merge); starts narration unless start=false. */
+  @Post(':id/chapters/review')
+  reviewChapters(@Param('id') id: string, @Body() body: unknown) {
+    return this.projects.reviewChapters(id, body);
+  }
+
   @Get(':id/status')
   status(@Param('id') id: string) {
     return this.projects.status(id);

@@ -6,10 +6,11 @@ import { cleanPages } from './clean';
 import type { CleanPage, Token } from './model';
 import { headingNarration, isSpeakable, normalizeNarration } from './normalize';
 import { buildParagraphs, buildVocabulary, type RawParagraph } from './paragraphs';
+import { restoreSectionOpenings } from './dropcaps';
 import { regionsFor } from './regions';
 import { splitSentences } from './sentences';
 
-export const ANALYZER_VERSION = 'analyze-v1';
+export const ANALYZER_VERSION = 'analyze-v2';
 
 export interface CleanResult {
   pages: CleanPage[];
@@ -76,8 +77,9 @@ export async function analyzeCleaned(clean: CleanResult, meta: ExtractionMeta, o
   const body = clean.report.bodyFontSize;
   const vocab = buildVocabulary(clean.pages);
   const { paragraphs: paras, dehyphenated } = buildParagraphs(clean.pages, body, vocab);
-  const report: CleaningReport = { ...clean.report, dehyphenated };
   if (!paras.length) throw Object.assign(new Error('No readable text'), { code: 'PDF_NO_TEXT' });
+  const restoredDropCaps = restoreSectionOpenings(paras);
+  const report: CleaningReport = { ...clean.report, dehyphenated, restoredDropCaps };
   opts.onProgress?.(1, 4, 'Detecting chapters');
 
   // ── Chapters: deterministic first, LLM only for ambiguous structure ──

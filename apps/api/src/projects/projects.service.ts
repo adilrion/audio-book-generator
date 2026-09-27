@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, type Document, type JobStatus, type Project } from '@prisma/client';
-import { CachePaths, cleanProjectCache, deleteProjectFiles, type OutputRecord, type ProjectManifest } from '@app/pipeline';
+import { CachePaths, cleanProjectCache, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, type OutputRecord, type ProjectManifest } from '@app/pipeline';
 import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
 import {
   ASPECT_SIZES,
@@ -12,6 +12,7 @@ import {
   type OutputFile,
   type PdfInspection,
   type ProgressSnapshot,
+  type ChapterSummary,
   type ProjectDetail,
   type ProjectSettings,
   type ProjectSummary,
@@ -22,7 +23,7 @@ import { badRequest, conflict, notFound } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { PythonService } from '../system/python.service';
-import { settingsSchema } from './settings.schema';
+import { chapterReviewSchema, settingsSchema } from './settings.schema';
 
 const ACTIVE: JobStatus[] = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
 /** Project ids are UUIDs; anything with dots or slashes (e.g. "..%2F..") must never reach a file path. */
@@ -193,8 +194,61 @@ export class ProjectsService {
       snapshot: this.snapshot(p),
       steps,
       outputs: await this.outputs(id),
-      chapters: chapters.map((c) => ({ index: c.index, title: c.title, pageStart: c.pageStart, pageEnd: c.pageEnd, durationSec: dur.get(c.index) })),
+      chapters: chapters.map((c, i) => ({
+        index: c.index,
+        title: c.title,
+        pageStart: c.pageStart,
+        pageEnd: c.pageEnd,
+        durationSec: dur.get(c.index),
+        matter: chapterMatter(c.title, i, chapters.length),
+      })),
+      analysisKey: p.analysisKey ?? undefined,
     };
+  }
+
+  /** Chapter list for the review screen: adds a text preview and word count per chapter. */
+  async chapters(id: string): Promise<ChapterSummary[]> {
+    await this.get(id);
+    const rows = await this.prisma.chapter.findMany({
+      where: { projectId: id },
+      orderBy: { index: 'asc' },
+      include: { paragraphs: { select: { kind: true, text: true }, orderBy: { index: 'asc' } } },
+    });
+    const audio = await this.prisma.audioChunk.findMany({ where: { projectId: id }, select: { chapterIndex: true, durationSec: true } });
+    const dur = new Map(audio.map((a) => [a.chapterIndex, a.durationSec]));
+    return rows.map((c, i) => {
+      const firstBody = c.paragraphs.find((p) => p.kind === 'body')?.text ?? c.paragraphs[0]?.text ?? '';
+      return {
+        index: c.index,
+        title: c.title,
+        pageStart: c.pageStart,
+        pageEnd: c.pageEnd,
+        durationSec: dur.get(c.index),
+        matter: chapterMatter(c.title, i, rows.length),
+        preview: firstBody.length > 180 ? `${firstBody.slice(0, 177).trimEnd()}…` : firstBody,
+        wordCount: c.paragraphs.reduce((n, p) => n + (p.text.match(/\S+/g)?.length ?? 0), 0),
+      };
+    });
+  }
+
+  /** Save the reviewed chapter list (rename / exclude / merge) and, by default, start narration. */
+  async reviewChapters(id: string, body: unknown): Promise<{ jobId?: string }> {
+    const parsed = chapterReviewSchema.safeParse(body);
+    if (!parsed.success) throw badRequest(`Invalid chapter review: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+    const p = await this.get(id);
+    if (ACTIVE.includes(p.status)) throw conflict('Chapters cannot be changed while the project is processing.');
+    if (!p.analysisKey) throw conflict('Chapters have not been detected yet — start processing first.');
+    const known = new Set((await this.prisma.chapter.findMany({ where: { projectId: id }, select: { index: true } })).map((c) => c.index));
+    const items = parsed.data.items;
+    const unknown = items.filter((e) => !known.has(e.index)).map((e) => e.index);
+    if (unknown.length) throw badRequest(`Unknown chapter number(s): ${unknown.map((i) => i + 1).join(', ')}.`);
+    const excluded = new Set(items.filter((e) => e.exclude).map((e) => e.index));
+    if ([...known].every((i) => excluded.has(i))) throw badRequest('Keep at least one chapter to narrate.');
+    const settings = resolveSettings(p.settings as DeepPartial<ProjectSettings>);
+    settings.text.chapterEdits = { analysisKey: p.analysisKey, items };
+    await this.prisma.project.update({ where: { id }, data: { settings: settings as unknown as Prisma.InputJsonValue } });
+    if (parsed.data.start === false) return {};
+    return this.process(id);
   }
 
   async steps(id: string): Promise<StepRecord[]> {
@@ -380,4 +434,11 @@ export class ProjectsService {
 /** Restart: drop derived per-project files (timeline, manifest). Final outputs are overwritten on success. */
 async function rmOutputsKeepNothing(dir: string) {
   for (const f of ['manifest.json', 'timeline.json']) await fsp.rm(path.join(dir, f), { force: true });
+}
+
+/** Front matter = the opening chapter before the first real one; back matter = licence, index… */
+function chapterMatter(title: string, i: number, n: number): ChapterSummary['matter'] {
+  if (i === 0 && n > 1 && (title === 'Opening Pages' || isFrontMatterTitle(title))) return 'front';
+  if (isBackMatterTitle(title)) return 'back';
+  return undefined;
 }

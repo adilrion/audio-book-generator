@@ -58,6 +58,7 @@ Options for create:
   --theme paper|light|dark
   --chapters <a-b>          Only chapters a..b (1-based), e.g. 1-2
   --skip-front-matter       Skip content before the first chapter
+  --keep-back-matter        Also narrate trailing licence/index/about-the-author chapters
   --no-llm                  Do not use the local LLM (Ollama)
   --ocr auto|off|force      OCR for scanned pages (needs tesseract)
   --password <pw>           Password for protected PDFs
@@ -127,6 +128,7 @@ async function cmdCreate(args: string[]) {
       theme: { type: 'string' },
       chapters: { type: 'string' },
       'skip-front-matter': { type: 'boolean' },
+      'keep-back-matter': { type: 'boolean' },
       'no-llm': { type: 'boolean' },
       ocr: { type: 'string' },
       password: { type: 'string' },
@@ -152,6 +154,7 @@ async function cmdCreate(args: string[]) {
     text: {
       useLlm: !values['no-llm'],
       skipFrontMatter: !!values['skip-front-matter'],
+      skipBackMatter: !values['keep-back-matter'],
       ocr: (values.ocr as 'auto') ?? 'auto',
     },
     video: {

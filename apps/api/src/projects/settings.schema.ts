@@ -11,6 +11,8 @@ export const settingsSchema = z
         useLlm: z.boolean(),
         ocr: z.enum(['auto', 'off', 'force']),
         skipFrontMatter: z.boolean(),
+        skipBackMatter: z.boolean(),
+        reviewChapters: z.boolean(),
         chapterRange: z.object({ from: z.number().int().min(1), to: z.number().int().min(1) }).nullable(),
       })
       .partial(),
@@ -43,3 +45,19 @@ export const settingsSchema = z
   .partial();
 
 export type SettingsInput = z.infer<typeof settingsSchema>;
+
+/** Body of POST /projects/:id/chapters/review — the reviewed chapter list. */
+export const chapterReviewSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        index: z.number().int().min(0),
+        title: z.string().trim().min(1).max(200).optional(),
+        exclude: z.boolean().optional(),
+        mergeWithPrevious: z.boolean().optional(),
+      }),
+    )
+    .max(5000),
+  /** Start narration right away (default true). */
+  start: z.boolean().optional(),
+});

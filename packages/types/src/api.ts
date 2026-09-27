@@ -21,7 +21,9 @@ export interface ProjectDetail extends ProjectSummary {
   snapshot: ProgressSnapshot;
   steps: StepRecord[];
   outputs: OutputFile[];
-  chapters: { index: number; title: string; pageStart: number; pageEnd: number; durationSec?: number }[];
+  chapters: ChapterSummary[];
+  /** Analysis the chapter list belongs to (needed to save a chapter review). */
+  analysisKey?: string;
 }
 
 export interface OutputFile {
@@ -42,4 +44,17 @@ export interface HealthCheck {
 export interface HealthReport {
   ok: boolean;
   checks: HealthCheck[];
+}
+
+export interface ChapterSummary {
+  index: number;
+  title: string;
+  pageStart: number;
+  pageEnd: number;
+  durationSec?: number;
+  /** Detected as front matter (cover, contents, copyright…) or back matter (licence, index…). */
+  matter?: 'front' | 'back';
+  /** Start of the chapter's first body paragraph. */
+  preview?: string;
+  wordCount?: number;
 }

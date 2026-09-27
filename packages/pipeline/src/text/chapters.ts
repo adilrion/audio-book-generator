@@ -36,6 +36,14 @@ export interface ChapterDetection {
 export const paraText = (p: RawParagraph) => p.tokens.map((t) => t.t).join(' ');
 const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
+const BACK_MATTER =
+  /^(index|general index|bibliography|about the (author|authors|translator|illustrator)|also by\b|other (books|titles) by|colophon|(the )?full project gutenberg licen[sc]e|section \d+\.\s.*project gutenberg|.*project gutenberg(-tm)? (licen[sc]e|literary archive)|licen[sc]e|reading group guide|a note on the type|praise for)/i;
+
+/** Titles of chapters that are not part of the book's text proper when they come at the end. */
+export function isBackMatterTitle(title: string): boolean {
+  return BACK_MATTER.test(title.trim());
+}
+
 export function isFrontMatterTitle(title: string): boolean {
   return FRONT_MATTER.test(title.trim());
 }

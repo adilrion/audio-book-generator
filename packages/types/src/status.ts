@@ -4,6 +4,8 @@ export const JOB_STATUSES = [
   'EXTRACTING',
   'CLEANING',
   'ANALYZING',
+  /** Chapter detection finished; waiting for the user to review the chapter list. */
+  'AWAITING_REVIEW',
   'GENERATING_AUDIO',
   'PREPARING_VIDEO',
   'RENDERING',
