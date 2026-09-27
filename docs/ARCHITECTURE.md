@@ -26,6 +26,7 @@ File references are given so you can check each claim.
 - [Database schema](#database-schema)
 - [Error handling](#error-handling)
 - [Memory strategy for a 16 GB Mac](#memory-strategy-for-a-16-gb-mac)
+- [Power modes and live CPU control](#power-modes-and-live-cpu-control)
 
 ---
 
@@ -524,3 +525,31 @@ ANALYZING, GENERATING_AUDIO, PREPARING_VIDEO, RENDERING, COMPLETED, FAILED, CANC
 | LLM | Ollama runs natively; `qwen3:4b` is 2.5 GB on disk and stays loaded for 10 min after the last request (`keep_alive`). `MAX_CONCURRENT_LLM=1` |
 | Infrastructure | Docker limits Postgres to 512 MB and Redis to 320 MB (`maxmemory 256mb`) |
 | Projects | `MAX_CONCURRENT_PROJECTS=1`: one book at a time |
+
+## Power modes and live CPU control
+
+`pipeline/performance.ts`. `planResources(prefs, machine, onBattery)` turns a mode into a
+`ResourcePlan`: TTS processes × threads, render workers × threads, `nice` level, and whether to
+use macOS background QoS (efficiency cores). The table in the README comes from measurements;
+the key one is that Kokoro-82M on onnxruntime scales poorly past 2–3 threads, so Balanced
+(2 × 2 threads) matches all-core throughput at about 40 % of the CPU.
+
+`PerformanceController` applies the plan to the running pools:
+
+- **Pause** sends `SIGSTOP` to every Python process of the run and its children (FFmpeg encoders),
+  and `SIGCONT` on resume. Pools also have a *gate*: new calls wait while paused (a cancel still
+  gets through), and the runner's chapter slots and the Node-side FFmpeg steps (audio mastering,
+  mux) wait too. The BullMQ lock keeps renewing because the Node event loop is not paused.
+- **Efficiency cores** (`silent`): `taskpolicy -b -p <pid>` on the running processes, `-B` to undo;
+  new processes are spawned through `taskpolicy -b`. Both `taskpolicy` and `nice` exec the program in
+  place (same PID), so pause/kill still hit Python directly.
+- **Threads and process counts** are fixed per process (onnxruntime session options), so
+  `PythonPool.configure()` bumps a generation counter: idle processes are replaced right away, busy
+  ones after their current call, which is one chapter. The runner's `withSlot()` limits how many
+  chapters of a stage run at once to the current plan.
+- **Battery**: `pmset -g batt` every 30 s; with `quietOnBattery`, Balanced and Fast run as Cool & quiet.
+
+The worker creates one controller per job and reads the preferences from the `AppSetting` table
+every 3 s (`PUT /system/performance` writes them). The CLI uses `--power` / `PERFORMANCE_MODE` and
+the battery rule. None of this is part of any cache key: power settings change how fast the output is
+produced, never the output itself.

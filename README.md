@@ -40,6 +40,7 @@ book.pdf  ──►  audiobook.mp4   1920×1080 H.264 + AAC, highlighted pages, 
 - [Processing pipeline](#processing-pipeline)
 - [Storage layout](#storage-layout)
 - [Troubleshooting](#troubleshooting)
+- [Power modes (heat, fan noise and battery)](#power-modes-heat-fan-noise-and-battery)
 - [Performance tuning for a 16 GB Mac](#performance-tuning-for-a-16-gb-mac)
 - [Extending](#extending)
 - [Testing](#testing)
@@ -84,6 +85,9 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Resumable and cached.** Every chapter's audio and video is a content-addressed artifact. An
   interrupted 10-hour book resumes at the chapter where it stopped. Changing the video theme re-renders
   video only, and changing the voice never redoes PDF or LLM work.
+- **Power modes that keep a laptop cool.** Silent (efficiency cores only), Cool & quiet (≈ 2 cores),
+  Balanced (≈ 4 cores, the default) and Fast. Switch live from the dashboard, pause instantly, and it
+  drops to Cool & quiet automatically on battery. See [Power modes](#power-modes-heat-fan-noise-and-battery).
 - **Resource-aware on 16 GB.** You set the number of TTS, render, LLM and project jobs that may run
   at once. Python model processes are shut down between stages to give memory back. Audio and video
   are streamed to disk and never held in RAM.
@@ -448,6 +452,8 @@ configuration: …`. Booleans accept `1`, `true`, `yes` and `on`.
 | `AUDIO_BITRATE` | `192k` | AAC bitrate of `audiobook.m4a` (copied unchanged into the MP4) |
 | `FFMPEG_BIN` / `FFPROBE_BIN` | `ffmpeg` / `ffprobe` | FFmpeg binaries |
 | **Resource limits (16 GB defaults)** | | |
+| `PERFORMANCE_MODE` | `balanced` | Starting power mode: `silent`, `quiet`, `balanced`, `fast`. The web UI changes it live (stored in the database); the CLI takes `--power`. |
+| `QUIET_ON_BATTERY` | `true` | Use Cool & quiet while the Mac runs on battery (when Balanced or Fast is selected) |
 | `MAX_CONCURRENT_TTS` | `2` | Chapters narrated in parallel (one Python process each, each with its own model copy, ≈ 0.7 GB peak RSS measured) |
 | `MAX_CONCURRENT_PDF_RENDER` | `2` | Chapters rendered to video in parallel (one compositor process + one FFmpeg encoder each) |
 | `MAX_CONCURRENT_LLM` | `1` | Concurrent Ollama requests |
@@ -569,6 +575,7 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 | `--theme` | `paper` \| `light` \| `dark` (`paper`) | Background and title-card colors |
 | `--chapters <a-b>` | e.g. `3` or `1-4` | Narrate only these chapters (1-based, as numbered after detection, including "Opening Pages") |
 | `--skip-front-matter` | off | Skip content before the first chapter (copyright page, table of contents, …) |
+| `--power <mode>` | `$PERFORMANCE_MODE` (balanced) | `silent` (efficiency cores), `quiet` (≈ 2 cores), `balanced` (≈ 4 cores), `fast`. Drops to `quiet` on battery unless `QUIET_ON_BATTERY=false`. |
 | `--keep-back-matter` | off | Also narrate trailing back matter (licence text, index, "about the author", "also by"), which is skipped by default |
 | `--no-llm` | off | Don't use Ollama for this run |
 | `--ocr` | `auto` \| `off` \| `force` (`auto`) | `auto` OCRs pages that have images but fewer than 20 characters of text |
@@ -659,6 +666,8 @@ enqueues a job.
 | `DELETE /projects/:id` | `?deleteOutputs=true` (default `false`) | `{ ok: true, outputsKept }`. Outputs are kept unless requested. The upload is removed only if no other project uses the same PDF. `409` while processing. |
 | `GET /system/health` | `?fresh=1` bypasses the 15 s cache | `HealthReport` `{ok, checks[{name, ok, required, message, fix?}]}`: the doctor's checks plus DB and Redis |
 | `GET /system/voices` | `?engine=kokoro\|piper\|say` (default `TTS_ENGINE`) | `{engine, available, message, voices: VoiceInfo[]}`; `400` for an unknown engine |
+| `GET /system/performance` | | `PerformanceStatus` `{prefs: {mode, quietOnBattery, paused}, plan (what runs now, e.g. quiet because on battery), modes (labels, measured speeds)}` |
+| `PUT /system/performance` | `{ mode?, quietOnBattery?, paused? }` | `PerformanceStatus`. A running worker applies it within ~3 s: pause/resume and efficiency-core mode instantly, process and thread counts from the next chapter. |
 | `GET /system/config` | | `{defaults: ProjectSettings, engines, defaultVoices, llm: {enabled, model}, maxUploadMb}` |
 
 Timeline JSON (used by the UI preview): `{version, duration, fps, pageSizes: {"<page>": [w, h]},
@@ -891,6 +900,45 @@ open an issue with the log. Restart the project to rebuild every artifact.
 
 ---
 
+## Power modes (heat, fan noise and battery)
+
+Processing a book keeps the CPU busy for hours. By default the old setup gave Kokoro every core,
+and a laptop got hot and loud without getting much faster. Measured on the M4 (10 cores):
+
+| Kokoro setup | Speed | CPU used |
+|---|---|---|
+| 1 process × 10 threads (the old default per process) | 5.0× realtime | 9.1 cores |
+| 1 × 4 threads | 4.2× | 3.6 cores |
+| **2 × 2 threads** (Balanced) | **5.7×** | **≈ 4 cores** |
+| 1 × 2 threads (Cool & quiet) | 2.9× | 2 cores |
+| efficiency cores only (Silent) | ≈ 0.5–1× | efficiency cores |
+
+Kokoro scales poorly past 2–3 threads, so two small processes are as fast as using all cores, at
+less than half the CPU. Two more free wins are now always on: onnxruntime threads no longer
+busy-wait between operators (≈ 13 % less CPU at the same speed), and the video compositor runs
+OpenCV single-threaded (same 190 fps, ⅓ less CPU).
+
+| Mode | What it uses | Relative time | When to use |
+|---|---|---|---|
+| **Silent** | efficiency cores only (macOS background QoS), 1 voice process | several times slower | overnight, no fan noise |
+| **Cool & quiet** | 1 voice process × 2 threads, 1 render worker, low priority | ≈ 1.3–2× Balanced | working on the laptop meanwhile, on battery |
+| **Balanced** (default) | 2 × 2 threads, 2 render workers | 1× | plugged in |
+| **Fast** | `MAX_CONCURRENT_TTS` processes × ~60 % of the cores, `MAX_CONCURRENT_PDF_RENDER` workers | slightly faster than Balanced | plugged in, don't mind the fan |
+
+Measured end-to-end with the CLI on a short book (4:09 of narration, on battery): Balanced 67 s at
+2.5 cores on average, Cool & quiet 84 s at 1.7 cores, Silent 9 min 18 s.
+
+- **Change it live.** Dashboard or project page → **Power**. Pause and Silent take effect at once:
+  processes are frozen with `SIGSTOP` / moved to the efficiency cores with `taskpolicy`. A different
+  thread or process count applies from the next chapter. The time estimates next to each mode are for
+  the open book.
+- **Pause processing (cool down now)** freezes the running work instantly and resumes it exactly
+  where it stopped. Nothing is recomputed.
+- **Battery.** With "Cool & quiet while on battery" on (default), Balanced and Fast drop to Cool &
+  quiet whenever the Mac runs on battery, and go back when it is plugged in again.
+- **CLI:** `pnpm audiobook ./book.pdf --power quiet` (or `PERFORMANCE_MODE` in `.env`).
+- Power settings never change the output, so switching modes never invalidates any cache.
+
 ## Performance tuning for a 16 GB Mac
 
 **Measured on the development machine (M4, 16 GB, macOS 15):**
@@ -951,14 +999,13 @@ Knobs, from most to least effect:
   `--fps 24` in the CLI or `video.fps` through the API; `VIDEO_FPS` only sets the CLI default.
 - **Resolution.** Render cost grows with pixel count. Set `video.width`/`video.height` through the
   API (`PATCH /projects/:id/settings`), for example 1280×720.
-- **`MAX_CONCURRENT_TTS`** (default 2). Each process loads its own Kokoro model (the fp32 ONNX file
+- **`MAX_CONCURRENT_TTS`** (default 2) is the process limit for the Fast mode (Balanced uses at most 2). Each process loads its own Kokoro model (the fp32 ONNX file
   is 325 MB; ≈ 0.7 GB per process in RAM). 1 uses the least memory; 3 or more is unlikely to help on
   a 10-core M4, because the cores are split between the processes.
-- **`KOKORO_THREADS`** is not a setting. The runner sets it per TTS process to
-  `floor(logical CPUs / MAX_CONCURRENT_TTS)`, so each process gets its share of the cores: 5 each on
-  a 10-core M4 with 2 processes. Keep `KOKORO_PROVIDER=cpu`.
-- **`MAX_CONCURRENT_PDF_RENDER`** (default 2). Each worker is a compositor process holding at most 3
-  page canvases, plus an FFmpeg encoder. Use 1 if the Mac gets hot or memory is tight.
+- **`KOKORO_THREADS`** is not a setting. The [power mode](#power-modes-heat-fan-noise-and-battery)
+  sets it per TTS process (2 in Balanced and Cool & quiet). Keep `KOKORO_PROVIDER=cpu`.
+- **`MAX_CONCURRENT_PDF_RENDER`** (default 2) is the render-worker limit for Balanced and Fast. Each worker is a compositor process holding at most 3
+  page canvases, plus an FFmpeg encoder. If the Mac gets hot, pick Cool & quiet rather than editing this.
 - **Audio only** (`--mode audio` / `outputMode: "audiobook_only"`) skips video entirely.
 - **`--chapters 1-2`** for trial runs. Later full runs reuse those chapters.
 - **`KEEP_INTERMEDIATE=true`** keeps chapter video segments and page rasters, so switching back to

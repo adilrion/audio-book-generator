@@ -60,6 +60,15 @@ vi.mock('bullmq', () => ({
 }));
 
 vi.mock('@app/pipeline', () => ({
+  // power mode: a no-op controller (its behaviour is tested in packages/pipeline/test/performance.test.ts)
+  PerformanceController: class {
+    async start() {}
+    async stop() {}
+  },
+  machineInfo: () => ({ cpuCount: 10, efficiencyCores: 6, maxTts: 2, maxRender: 2 }),
+  MODE_SPEED: {},
+  isOnBattery: async () => false,
+  planResources: () => ({}),
   PipelineRunner: class {
     constructor(
       _cfg: unknown,

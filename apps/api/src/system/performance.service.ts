@@ -10,7 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export const PERFORMANCE_KEY = 'performance';
 
 const LABELS: Record<PerformanceMode, { label: string; description: string }> = {
-  silent: { label: 'Silent', description: 'Efficiency cores only — no fan, slowest. Good overnight.' },
+  silent: { label: 'Silent', description: 'Efficiency cores only — no fan, but several times slower. For overnight runs.' },
   quiet: { label: 'Cool & quiet', description: 'About 2 cores. The Mac stays cool; takes roughly twice as long.' },
   balanced: { label: 'Balanced', description: 'About 4 cores. Nearly full speed without maxing out the CPU.' },
   fast: { label: 'Fast', description: 'All the cores allowed in .env. Hot and loud on a laptop.' },
@@ -23,8 +23,11 @@ const prefsSchema = z
 
 /** Reads the stored preferences (falls back to .env). Shared by the API and the worker. */
 export async function readPerformancePrefs(prisma: PrismaService, cfg: AppConfig): Promise<PerformancePrefs> {
-  const row = await prisma.appSetting.findUnique({ where: { key: PERFORMANCE_KEY } });
   const base: PerformancePrefs = { ...DEFAULT_PERFORMANCE, mode: cfg.PERFORMANCE_MODE, quietOnBattery: cfg.QUIET_ON_BATTERY };
+  // Never fail a book because the power setting can't be read: fall back to .env.
+  const row = await Promise.resolve()
+    .then(() => prisma.appSetting.findUnique({ where: { key: PERFORMANCE_KEY } }))
+    .catch(() => null);
   return { ...base, ...((row?.value as Partial<PerformancePrefs> | null) ?? {}) };
 }
 

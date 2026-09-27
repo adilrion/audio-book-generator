@@ -81,7 +81,8 @@ export function planResources(prefs: PerformancePrefs, m: MachineInfo, onBattery
 
 /** Rough throughput per mode (× realtime), from the measurements above; used for time estimates. */
 export const MODE_SPEED: Record<PerformanceMode, { tts: number; video: number; cores: string }> = {
-  silent: { tts: 1.0, video: 2.5, cores: 'efficiency cores only' },
+  // silent measured end-to-end on battery: 4:09 of narration in 9:18 (background QoS is heavily throttled)
+  silent: { tts: 0.45, video: 2, cores: 'efficiency cores only' },
   quiet: { tts: 2.9, video: 6.4, cores: '≈ 2 cores' },
   balanced: { tts: 5.7, video: 12, cores: '≈ 4 cores' },
   fast: { tts: 6.2, video: 12, cores: 'all cores' },
