@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnApplica
 import { Worker, type Job } from 'bullmq';
 import type { Prisma } from '@prisma/client';
 import { PipelineRunner } from '@app/pipeline';
-import { createLogger, type AppError } from '@app/shared';
+import { createLogger, describeError, type AppError } from '@app/shared';
 import { resolveSettings, type DeepPartial, type ProjectSettings } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { toUserError } from '../common/errors';
@@ -50,7 +50,7 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
       maxStalledCount: 0,
       autorun: false, // only once we hold the worker lock
     });
-    this.worker.on('error', (e) => this.log.error(`queue error: ${toUserError(e).message}`));
+    this.worker.on('error', (e) => this.log.error(`queue error: ${toUserError(e).message} — ${describeError(e)}`));
     const worker = this.worker;
     this.lock = new WorkerLock(() => worker.client as unknown as Promise<LockClient>, WORKER_LOCK_KEY);
     if (await this.lock.tryAcquire()) {
@@ -75,7 +75,7 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
         if (!this.stopping && (await this.lock!.tryAcquire())) return await this.start();
       }
     } catch (e) {
-      this.log.error(`Worker failed to start: ${toUserError(e).message}`);
+      this.log.error(`Worker failed to start: ${toUserError(e).message} — ${describeError(e)}`);
       process.exit(1);
     }
   }
@@ -83,7 +83,7 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
   private async start() {
     this.lock!.startRenewal((holder) => this.log.error(`Lost the worker lock to ${holder ?? 'nobody'} — is another worker running?`));
     await this.recoverInterrupted();
-    this.worker!.run().catch((e) => this.log.error(`queue error: ${toUserError(e).message}`));
+    this.worker!.run().catch((e) => this.log.error(`queue error: ${toUserError(e).message} — ${describeError(e)}`));
     this.log.log(`Worker ready (concurrency ${this.cfg.MAX_CONCURRENT_PROJECTS}, TTS ${this.cfg.MAX_CONCURRENT_TTS}, render ${this.cfg.MAX_CONCURRENT_PDF_RENDER})`);
   }
 
@@ -202,6 +202,7 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
     await Promise.allSettled([...this.inflight]);
     const released = this.lock?.release().catch(() => undefined);
     await Promise.race([released, new Promise((r) => setTimeout(r, 3000).unref())]);
-    await this.worker?.close().catch(() => undefined);
+    // close() waits for Redis; with a dead connection it can wait forever — never block shutdown on it.
+    await Promise.race([this.worker?.close().catch(() => undefined), new Promise((r) => setTimeout(r, 5000).unref())]);
   }
 }

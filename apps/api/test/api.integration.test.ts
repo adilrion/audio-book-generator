@@ -19,16 +19,31 @@ import type { OutputFile, ProgressSnapshot, ProjectDetail, StepRecord, Timeline 
 import { QUEUE_NAME, redisConnection } from '../src/queue/queue.service';
 
 const API = (process.env.API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
-const SAMPLE_PDF = '/private/tmp/claude-501/sample-book.pdf';
 const cfg = loadConfig();
 const PYTHON = cfg.PYTHON_BIN;
 const PROCESS_TIMEOUT_MS = 5 * 60_000;
 
+/** Generate the 3-page sample book (title page + 2 chapters) once per run with the worker's generator. */
+function makeSamplePdf(): string | null {
+  if (!fs.existsSync(PYTHON)) return null;
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'audiobook-api-sample-')), 'sample-book.pdf');
+  try {
+    execFileSync(PYTHON, ['-m', 'audiobook_worker.sample', out, '--chapters', '2', '--paras', '4'], {
+      env: { ...process.env, PYTHONPATH: cfg.workerDir },
+      stdio: 'ignore',
+    });
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 const apiUp = await fetch(`${API}/system/config`, { signal: AbortSignal.timeout(3000) })
   .then((r) => r.ok)
   .catch(() => false);
-const canRun = apiUp && fs.existsSync(SAMPLE_PDF) && fs.existsSync(PYTHON);
-if (!canRun) console.warn(`[api.integration] skipped: api=${apiUp} samplePdf=${fs.existsSync(SAMPLE_PDF)} python=${fs.existsSync(PYTHON)}`);
+const SAMPLE_PDF = apiUp ? makeSamplePdf() : null;
+const canRun = apiUp && !!SAMPLE_PDF && fs.existsSync(PYTHON);
+if (!canRun) console.warn(`[api.integration] skipped: api=${apiUp} samplePdf=${!!SAMPLE_PDF} python=${fs.existsSync(PYTHON)}`);
 
 type ErrorBody = { error: { code: string; message: string; hint?: string; retryable: boolean } };
 
@@ -59,7 +74,7 @@ describe.skipIf(!canRun)('API integration (live server)', () => {
   const strayUploads: string[] = [];
   const jobIds: string[] = [];
   const settings = { outputMode: 'audiobook_only', tts: { voice: 'af_sky' }, text: { chapterRange: { from: 2, to: 2 } } };
-  const samplePdf = new Uint8Array(Buffer.concat([fs.readFileSync(SAMPLE_PDF), Buffer.from(`\n% api integration test ${crypto.randomUUID()}\n`)]));
+  const samplePdf = SAMPLE_PDF ? new Uint8Array(Buffer.concat([fs.readFileSync(SAMPLE_PDF), Buffer.from(`\n% api integration test ${crypto.randomUUID()}\n`)])) : new Uint8Array();
   let project: ProjectDetail;
 
   afterAll(async () => {

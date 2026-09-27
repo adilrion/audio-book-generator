@@ -35,10 +35,11 @@ export interface AnalyzeOptions {
 export function looksBroken(text: string): boolean {
   const tokens = text.split(/\s+/).filter(Boolean);
   if (tokens.length >= 6 && tokens.filter((t) => /^\p{L}$/u.test(t)).length / tokens.length > 0.5) return true; // "T h e  e n d"
-  if (/[�ﬀ-ﬆ]/.test(text)) return true;
-  const letters = text.replace(/[^\p{L}]/gu, '').length || 1;
-  const odd = text.replace(/[\p{L}\p{N}\s.,;:!?'"()\-–—…’‘“”%$&/]/gu, '').length;
-  if (odd / letters > 0.08) return true;
+  if (/[\ufffd\ufb00-\ufb06]/.test(text)) return true; // replacement char / unresolved ligatures
+  const letters = text.replace(/[^\p{L}]/gu, '').length;
+  // Only symbols that ordinary prose never uses count as damage (brackets, #, * etc. are normal).
+  const odd = text.replace(/[\p{L}\p{N}\p{Z}\p{P}$%&+=<>|~^`°§¶©®™±×÷€£¥¢\u2010-\u2015]/gu, '').length;
+  if (letters >= 20 && odd / letters > 0.08) return true;
   if (tokens.filter((t) => /^\p{L}{26,}$/u.test(t)).length >= 2) return true; // glued words
   return false;
 }

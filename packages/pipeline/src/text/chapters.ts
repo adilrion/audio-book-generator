@@ -11,6 +11,12 @@ export const CHAPTER_PATTERNS: RegExp[] = [
   /^(prologue|epilogue|introduction|preface|foreword|afterword|conclusion|acknowledg(e)?ments|appendix(\s+[a-z0-9]+)?|interlude|postscript)\b/i,
   /^অধ্যায়\s*[০-৯\d]+/u, // Bangla "chapter N"
 ];
+/** A line that is nothing but a chapter marker ("CHAPTER III.", "Part Two", "Chapter 12:"). Strong evidence
+ *  even at body size and without bold — many books typeset chapter labels like body text. */
+// `chapter` may be glued to its number ("CHAPTERXXVII." from letter-spaced headings); part/book may not ("Parti").
+export const CHAPTER_MARKER_LINE = new RegExp(`^((chapter|chap\\.?)\\s*|(part|book)\\s+)${NUMBER}\\s*[.:]?$`, 'i');
+export const isChapterMarkerLine = (text: string) => CHAPTER_MARKER_LINE.test(text.trim());
+
 const NUMBERED_HEADING = /^(\d{1,2})(\.|\s|:)\s*\p{Lu}[^.!?]{1,80}$/u;
 const FRONT_MATTER = /^(cover|title( page)?|copyright|contents|table of contents|dedication|also by|half title|about the author|praise for)\b/i;
 
@@ -107,15 +113,23 @@ export function detectChapters(paras: RawParagraph[], toc: TocEntry[], body: num
   paras.forEach((p, i) => {
     if (p.tokens.length > 16) return;
     const t = paraText(p);
-    const headingish = p.kind === 'heading' || firstOnPage.has(i) || p.bold;
+    const headingish = p.kind === 'heading' || firstOnPage.has(i) || p.bold || isChapterMarkerLine(t);
     const numbered = p.kind === 'heading' && NUMBERED_HEADING.test(t);
-    if ((headingish && CHAPTER_PATTERNS.some((r) => r.test(t))) || numbered) {
+    if ((headingish && (isChapterMarkerLine(t) || CHAPTER_PATTERNS.some((r) => r.test(t)))) || numbered) {
       // "Chapter 1" + "The Beginning" subtitle → skip the subtitle as its own chapter
       const prev = pattern[pattern.length - 1];
-      if (prev && prev.paraIndex === i - 1 && !CHAPTER_PATTERNS.some((r) => r.test(t))) return;
+      if (prev && prev.paraIndex === i - 1 && !isChapterMarkerLine(t) && !CHAPTER_PATTERNS.some((r) => r.test(t))) return;
       pattern.push({ paraIndex: i, title: withSubtitle(paras, i) });
     }
   });
+  // A contents page that lists bare markers ("Chapter I." / "Chapter II." …) is not a run of chapters:
+  // drop runs of 3+ starts on one page with (almost) nothing between them.
+  for (let k = 0; k < pattern.length; ) {
+    let e = k;
+    while (e + 1 < pattern.length && paras[pattern[e + 1].paraIndex].pageStart === paras[pattern[k].paraIndex].pageStart && pattern[e + 1].paraIndex - pattern[e].paraIndex <= 2) e++;
+    if (e - k + 1 >= 3) pattern.splice(k, e - k + 1);
+    else k = e + 1;
+  }
   const patternOk = pattern.length >= 2 && pattern.length <= Math.max(2, paras.length / 3);
 
   // 3) Font tiers: the largest heading size used more than once

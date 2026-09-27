@@ -25,7 +25,7 @@
     "audiobook": "pnpm build:packages && pnpm --filter @app/cli build >/dev/null && node apps/cli/dist/main.js create",
     "audiobook:create": "pnpm build:packages && pnpm --filter @app/cli build >/dev/null && node apps/cli/dist/main.js create",
     "test": "pnpm test:ts && pnpm test:py",
-    "test:ts": "vitest run",
+    "test:ts": "vitest run && pnpm --filter @app/web test",
     "test:py": "cd workers/processing && .venv/bin/python -m pytest -q",
     "typecheck": "pnpm build:packages && pnpm -r typecheck",
     "clean": "rm -rf packages/*/dist apps/*/dist apps/web/.next packages/*/tsconfig.tsbuildinfo"

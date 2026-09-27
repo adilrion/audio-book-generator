@@ -1,3 +1,4 @@
+import { isChapterMarkerLine } from './chapters';
 import { type CleanPage, type Line, type Token, LOWER_START, TERMINAL, median, percentile } from './model';
 
 export interface RawParagraph {
@@ -130,10 +131,12 @@ export function buildParagraphs(pages: CleanPage[], body: number, vocab: Set<str
   };
 
   for (const l of allLines) {
-    const heading = isHeadingLine(l, body, bodyIsBold);
+    const marker = isChapterMarkerLine(l.text);
+    const heading = marker || isHeadingLine(l, body, bodyIsBold);
     const kind: RawParagraph['kind'] = heading ? 'heading' : 'body';
     const st = stats.get(l.page)!;
-    let split = !cur || !prev || cur.kind !== kind;
+    // A chapter-marker line is always its own paragraph, even when centered at body size.
+    let split = !cur || !prev || cur.kind !== kind || marker || isChapterMarkerLine(prev.text);
 
     if (!split && prev && cur) {
       const indent = l.b[0] - st.left;

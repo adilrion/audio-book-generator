@@ -193,6 +193,16 @@ first one that yields at least two chapters wins:
    headings like `1. Introduction`. A heading right after "Chapter 1" on the same page becomes
    its subtitle ("Chapter 1: The Beginning"), not a separate chapter. Accepted when there are
    between 2 and paragraphs/3 matches.
+
+   **Bare chapter-marker lines** (`isChapterMarkerLine`: the whole line is `CHAPTER III.`,
+   `Part Two`, `Chapter 12:`, also `CHAPTERXXVII.` without the space) count even at body size,
+   not bold and not first on the page. Many books set chapter labels like body text, centered,
+   often below an illustration caption. `buildParagraphs` always makes such a line its own
+   `heading` paragraph, so it can't be glued onto the previous page's paragraph. A run of 3 or more
+   markers on one page with at most one paragraph between them is a contents page and is ignored.
+   These rules took a Chrome-printed *Pride and Prejudice* (280 pages) from 32 to 61 of 61
+   chapters. Narration reads the roman numerals as numbers ("CHAPTER XIII." → "Chapter 13."),
+   but a lone lowercase-keyword "I" stays the pronoun ("for my part I think").
 3. **Font tiers**: the largest heading size that is used between 2 and paragraphs/4 times.
 4. **Local LLM**, only when the result is *ambiguous* or has fewer than two chapters, and there
    are at least two candidate headings. Ambiguous means: the pattern count and the font-tier count

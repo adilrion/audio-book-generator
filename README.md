@@ -470,7 +470,7 @@ you set yourself are overridden for those processes.
 | `pnpm build` | Packages + API + CLI + web |
 | `pnpm typecheck` | Type-check every workspace package |
 | `pnpm test` | `test:ts` then `test:py` |
-| `pnpm test:ts` | vitest for `packages/*/test` and `apps/api/test` |
+| `pnpm test:ts` | vitest for `packages/*/test` and `apps/api/test`, then the web tests (`apps/web/test`) |
 | `pnpm test:py` | pytest in `workers/processing` |
 | `pnpm --filter @app/web test` | vitest for the web UI helpers (`apps/web/test`; not part of `pnpm test`) |
 | `pnpm doctor` | Builds the packages, then runs the CLI's dependency check with fix commands (needs the CLI built once: `pnpm --filter @app/cli build`) |
@@ -887,6 +887,22 @@ not measured end-to-end:
 | Extraction, analysis, audio mastering, mux | minutes | minutes |
 | **Total with defaults (estimate)** | | **≈ 3–4 h** |
 
+**Real-book check (measured).** *Pride and Prejudice* (Project Gutenberg HTML printed to a 6×9 in PDF
+with headless Chrome, including Chrome's running header/footer: date, title, URL, `41/280`):
+
+| Measurement | Result |
+|---|---|
+| Size | 280 pages, 135,166 extracted words |
+| PDF extraction (PyMuPDF, words + boxes for every page) | 3.9 s |
+| Cleaning + paragraphs + chapters + sentences | 0.26 s, ≈ 370 MB RSS (Node) |
+| Running headers/footers and page numbers | all removed (3 repeating lines, 776 page-number lines) |
+| Chapter detection | 61 / 61 chapters (the labels are body-size, centered, often below an illustration caption) |
+| Highlight mapping | 6,806 sentences, 108 of them split across a page break, 0 boxes outside the page |
+| Chapter I only (`--chapters 2`), Kokoro `af_heart`, 1080p30 `follow` | 4:49 of narration in 1:57 wall time (video rendered at 204 fps), A/V drift 77 ms |
+
+At the narration pace measured on that chapter (≈ 175 words/min), the whole book is ≈ 12–13 h of
+audio. The throughput in the table above is the basis for the time estimate.
+
 Knobs, from most to least effect:
 
 - **`animation=static`** is the fastest style. There is no camera motion or zoom, so consecutive
@@ -1024,7 +1040,7 @@ What is missing:
 
 ```bash
 pnpm test        # everything
-pnpm test:ts     # vitest: packages/*/test and apps/api/test
+pnpm test:ts     # vitest: packages/*/test, apps/api/test, then apps/web/test
 pnpm test:py     # pytest: workers/processing/tests
 ```
 
