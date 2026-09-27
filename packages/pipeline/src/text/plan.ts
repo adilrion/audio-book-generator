@@ -1,8 +1,21 @@
+import { hashKey } from '@app/shared';
 import type { Analysis, Chapter, ChapterEdits, TextSettings } from '@app/types';
 import { isBackMatterTitle } from './chapters';
 
 /** Project Gutenberg wraps every book in licence boilerplate between these markers. */
 const GUTENBERG_END = /^\*{3}\s*end of (the|this) project gutenberg/i;
+
+/** Fingerprint of a chapter list, as reviewed: same chapters → same signature, whatever produced them. */
+export function chaptersSignature(chapters: { index: number; title: string; pageStart: number; pageEnd: number }[]): string {
+  return hashKey(chapters.map((c) => [c.index, c.title, c.pageStart, c.pageEnd]));
+}
+
+/** Does a saved review belong to this analysis? */
+export function reviewApplies(analysis: Analysis, edits: ChapterEdits | undefined, analysisKey?: string): boolean {
+  if (!edits) return false;
+  if (!analysisKey || edits.analysisKey === analysisKey) return true;
+  return !!edits.chaptersSignature && edits.chaptersSignature === chaptersSignature(analysis.chapters);
+}
 
 export interface ChapterPlan {
   chapters: Chapter[];
@@ -17,7 +30,7 @@ export interface ChapterPlan {
  */
 export function planChapters(analysis: Analysis, text: Pick<TextSettings, 'chapterRange' | 'skipBackMatter' | 'chapterEdits'>, analysisKey?: string): ChapterPlan {
   const skipped: ChapterPlan['skipped'] = [];
-  const edits = text.chapterEdits && (!analysisKey || text.chapterEdits.analysisKey === analysisKey) ? text.chapterEdits : undefined;
+  const edits = reviewApplies(analysis, text.chapterEdits, analysisKey) ? text.chapterEdits : undefined;
   const byIndex = new Map((edits?.items ?? []).map((e) => [e.index, e]));
   let chapters: Chapter[] = analysis.chapters.map((c) => ({ ...c, paragraphs: [...c.paragraphs] }));
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Analysis, Chapter } from '@app/types';
-import { isBackMatterTitle, planChapters, restoreSectionOpenings, type RawParagraph } from '../src';
+import { chaptersSignature, isBackMatterTitle, planChapters, restoreSectionOpenings, reviewApplies, type RawParagraph } from '../src';
 
 // Regressions from a real 280-page book whose chapter initials are images (not in the text layer).
 const para = (text: string, kind: 'heading' | 'body' = 'body'): RawParagraph => ({
@@ -116,5 +116,15 @@ describe('chapter plan: back matter, review edits, range', () => {
   it('applies the 1-based chapter range last', () => {
     const a = analysisOf(['A', 'B', 'C', 'D']);
     expect(planChapters(a, { skipBackMatter: true, chapterRange: { from: 2, to: 3 } }).chapters.map((c) => c.title)).toEqual(['B', 'C']);
+  });
+
+  it('keeps a review when the analysis key changes but the chapter list is the same', () => {
+    const a = analysisOf(['Cover', 'Chapter 1', 'Chapter 2']);
+    const edits = { analysisKey: 'WITH-LLM', chaptersSignature: chaptersSignature(a.chapters), items: [{ index: 0, exclude: true }] };
+    expect(reviewApplies(a, edits, 'WITHOUT-LLM')).toBe(true); // e.g. Ollama became unavailable
+    expect(planChapters(a, { skipBackMatter: true, chapterEdits: edits }, 'WITHOUT-LLM').chapters.map((c) => c.index)).toEqual([1, 2]);
+    const renamed = analysisOf(['Cover', 'Chapter One', 'Chapter 2']); // a different chapter list → review again
+    expect(reviewApplies(renamed, edits, 'OTHER')).toBe(false);
+    expect(reviewApplies(a, { ...edits, chaptersSignature: undefined }, 'OTHER')).toBe(false);
   });
 });

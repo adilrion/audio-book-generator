@@ -260,8 +260,10 @@ extraction or analysis:
    "Epilogue" are content and are kept.
 2. **Review edits** (`text.chapterEdits`, bound to an `analysisKey`): `exclude`, `title`, and
    `mergeWithPrevious` (the chapter's paragraphs are appended to the previous kept chapter). An
-   explicit `exclude: false` keeps a back-matter chapter. Edits made for another analysis are
-   ignored, so a changed PDF or analyzer asks for a new review.
+   explicit `exclude: false` keeps a back-matter chapter. Edits apply to the analysis they were
+   made for, or to any analysis with the same chapter list (`chaptersSignature`: index, title and
+   pages), so the review survives an analysis-key change that leaves the chapters alone, such as
+   Ollama becoming unavailable. A different chapter list asks for a new review.
 3. **Chapter range** (1-based, on the original numbering) last.
 
 Kept chapters keep their original `index`, so step keys (`TTS_CHAPTER_n`), the UI and the

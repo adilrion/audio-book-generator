@@ -19,7 +19,10 @@ export function estimateNarrationSec(words: number, speed = 1): number {
  * otherwise everything ticked except back matter (and front matter when "Skip front matter" is on).
  */
 export function initialReviewRows(chapters: ChapterSummary[], settings: ProjectSettings, analysisKey?: string): ReviewRow[] {
-  const prev = settings.text.chapterEdits && settings.text.chapterEdits.analysisKey === analysisKey ? settings.text.chapterEdits.items : undefined;
+  const e0 = settings.text.chapterEdits;
+  // Same analysis, or (analysis key changed, e.g. the local LLM went away) an edit list whose chapters all still exist.
+  const known = new Set(chapters.map((c) => c.index));
+  const prev = e0 && (e0.analysisKey === analysisKey || (!!e0.chaptersSignature && e0.items.every((i) => known.has(i.index)))) ? e0.items : undefined;
   const edits = new Map((prev ?? []).map((e) => [e.index, e]));
   return chapters.map((c) => {
     const e = edits.get(c.index);

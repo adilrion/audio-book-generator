@@ -904,15 +904,26 @@ open an issue with the log. Restart the project to rebuild every artifact.
 | Video, 640×360 @ 15 fps | ≈ 600 frames/s |
 | Encoded 1080p `follow` page video (sample book, 6M cap) | ≈ 1.36 Mbit/s |
 
-**Estimates for a ~280-page book (~10 h of narration).** These are derived from the numbers above,
-not measured end-to-end:
+**Full-book run (measured, partial).** *Pride and Prejudice*, 61 chapters ≈ 12 h of narration,
+default settings (2 Kokoro processes, 1080p30 `follow`), on a Mac that was also running other apps
+(3–4 GB swap in use):
 
-| Stage | 1 process | 2 processes (default) |
-|---|---|---|
-| TTS: 10 h × 0.21 | ≈ 2 h | ≈ 1.2–1.5 h (both processes share the same cores, so less than 2× faster) |
-| Video: 10 h × 30 fps = 1.08 M frames ÷ ~100 fps | ≈ 3 h | ≈ 1.5–2 h |
-| Extraction, analysis, audio mastering, mux | minutes | minutes |
-| **Total with defaults (estimate)** | | **≈ 3–4 h** |
+| Measurement | Result |
+|---|---|
+| TTS with 2 processes | 39.5 min of audio in 7.0 min of wall time: **≈ 5.7× realtime** (RTF 0.18) |
+| Peak memory | Python TTS processes ≈ 2.4 GB in total, worker (Node) < 100 MB |
+| Video, one chapter, 1080p30 `follow`, VideoToolbox | 204 frames/s (≈ 6.8× realtime) |
+| Resume after the run was interrupted | finished chapters were reused from cache; only the chapters in progress were redone |
+
+The run was stopped after about 15 % when the services were restarted, so the totals below are
+still extrapolated from the measured throughput:
+
+| Stage (12 h of narration) | Estimate |
+|---|---|
+| TTS, 2 processes, 5.7× realtime | ≈ 2.1 h |
+| Video, 2 render workers (≈ 6.8× realtime each, sharing the CPU) | ≈ 1–1.5 h |
+| Extraction, analysis, audio mastering, mux | minutes |
+| **Total with defaults** | **≈ 3–4 h** |
 
 **Real-book check (measured).** *Pride and Prejudice* (Project Gutenberg HTML printed to a 6×9 in PDF
 with headless Chrome, including Chrome's running header/footer: date, title, URL, `41/280`):

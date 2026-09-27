@@ -43,6 +43,9 @@ export interface ChapterEdit {
 
 export interface ChapterEdits {
   analysisKey: string;
+  /** Fingerprint of the reviewed chapter list (index, title, pages). The review still applies when
+   *  the analysis key changes but the chapters are the same (e.g. Ollama became unavailable). */
+  chaptersSignature?: string;
   items: ChapterEdit[];
 }
 

@@ -43,7 +43,7 @@ import { OllamaProvider } from '../llm/ollama';
 import type { LLMProvider } from '../llm/provider';
 import { PythonPool } from '../python/bridge';
 import { ANALYZER_VERSION, analyzeCleaned, cleanDocument } from '../text/analyze';
-import { planChapters, plannedAnalysis } from '../text/plan';
+import { planChapters, plannedAnalysis, reviewApplies } from '../text/plan';
 import { buildTimeline } from '../timeline/build';
 import { buildCues, toSrt, youtubeChapters } from '../timeline/subtitles';
 import { createTTSProvider } from '../tts/registry';
@@ -356,7 +356,7 @@ export class PipelineRunner {
       this.setStage('ANALYZE', 1, `${analysis.chapters.length} chapters found`, { totalChapters: analysis.chapters.length });
 
       // ── Review pause: the user checks the chapter list before hours of narration start ──
-      if (s.text.reviewChapters && s.text.chapterEdits?.analysisKey !== analysisKey) {
+      if (s.text.reviewChapters && !reviewApplies(analysis, s.text.chapterEdits, analysisKey)) {
         this.emit({ status: 'AWAITING_REVIEW', stage: undefined, message: 'Review the detected chapters, then continue.', totalChapters: analysis.chapters.length }, true);
         return { outputs: [], durationSec: 0, analysis, warnings: this.warnings, awaitingReview: true, analysisKey };
       }

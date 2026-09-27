@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, type Document, type JobStatus, type Project } from '@prisma/client';
-import { CachePaths, cleanProjectCache, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, type OutputRecord, type ProjectManifest } from '@app/pipeline';
+import { CachePaths, chaptersSignature, cleanProjectCache, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, type OutputRecord, type ProjectManifest } from '@app/pipeline';
 import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
 import {
   ASPECT_SIZES,
@@ -238,14 +238,15 @@ export class ProjectsService {
     const p = await this.get(id);
     if (ACTIVE.includes(p.status)) throw conflict('Chapters cannot be changed while the project is processing.');
     if (!p.analysisKey) throw conflict('Chapters have not been detected yet — start processing first.');
-    const known = new Set((await this.prisma.chapter.findMany({ where: { projectId: id }, select: { index: true } })).map((c) => c.index));
+    const rows = await this.prisma.chapter.findMany({ where: { projectId: id }, orderBy: { index: 'asc' }, select: { index: true, title: true, pageStart: true, pageEnd: true } });
+    const known = new Set(rows.map((c) => c.index));
     const items = parsed.data.items;
     const unknown = items.filter((e) => !known.has(e.index)).map((e) => e.index);
     if (unknown.length) throw badRequest(`Unknown chapter number(s): ${unknown.map((i) => i + 1).join(', ')}.`);
     const excluded = new Set(items.filter((e) => e.exclude).map((e) => e.index));
     if ([...known].every((i) => excluded.has(i))) throw badRequest('Keep at least one chapter to narrate.');
     const settings = resolveSettings(p.settings as DeepPartial<ProjectSettings>);
-    settings.text.chapterEdits = { analysisKey: p.analysisKey, items };
+    settings.text.chapterEdits = { analysisKey: p.analysisKey, chaptersSignature: chaptersSignature(rows), items };
     await this.prisma.project.update({ where: { id }, data: { settings: settings as unknown as Prisma.InputJsonValue } });
     if (parsed.data.start === false) return {};
     return this.process(id);

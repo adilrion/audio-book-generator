@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '@app/config';
+import { chaptersSignature } from '@app/pipeline';
 import { AppError } from '@app/shared';
 import { DEFAULT_SETTINGS, type ProjectSettings } from '@app/types';
 import type { PrismaService } from '../src/prisma/prisma.service';
@@ -73,6 +74,7 @@ describe('chapter review', () => {
     expect(processed()).toBe(1);
     expect(getSettings().text.chapterEdits).toEqual({
       analysisKey: 'AK1',
+      chaptersSignature: chaptersSignature(TITLES.map((title, index) => ({ index, title, pageStart: index + 1, pageEnd: index + 1 }))),
       items: [{ index: 0, exclude: true }, { index: 2, title: 'Chapter Two' }, { index: 3, exclude: false }],
     });
     expect(getSettings().text.reviewChapters).toBe(true);
