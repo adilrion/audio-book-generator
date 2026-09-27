@@ -4,6 +4,7 @@ import type { HighlightStyle, Timeline } from '@app/types';
 import { ChevronsLeft, ChevronsRight, LoaderCircle, Pause, Play, SkipBack, SkipForward, TriangleAlert } from 'lucide-react';
 import { type KeyboardEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
 import { pageImageUrl } from '@/lib/api';
 import { formatClock, formatDuration } from '@/lib/format';
 import { withAlpha } from '@/lib/highlight';
@@ -21,6 +22,8 @@ export interface ReadAlongPlayerProps {
   highlightColor: string;
   /** Open at this time (seconds), e.g. from a `?t=` deep link. */
   initialTime?: number;
+  /** False while the player is out of view (another tab) — playback pauses. */
+  active?: boolean;
 }
 
 function HighlightBox({ style, color, box }: { style: HighlightStyle; color: string; box: { left: number; top: number; width: number; height: number } }) {
@@ -41,7 +44,7 @@ function HighlightBox({ style, color, box }: { style: HighlightStyle; color: str
  * current segment's rects (PDF points → % of the page box). The playhead is sampled every
  * animation frame; a binary search finds the segment, and React only re-renders when it changes.
  */
-export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle, highlightColor, initialTime }: ReadAlongPlayerProps) {
+export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle, highlightColor, initialTime, active = true }: ReadAlongPlayerProps) {
   const segments = timeline.segments;
   const chapters = timeline.chapters;
   const duration = timeline.duration || segments.at(-1)?.end || 0;
@@ -139,6 +142,10 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
     if (audioRef.current) audioRef.current.playbackRate = rate;
   }, [rate]);
 
+  useEffect(() => {
+    if (!active) audioRef.current?.pause();
+  }, [active]);
+
   const seek = useCallback(
     (t: number) => {
       const a = audioRef.current;
@@ -234,7 +241,7 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
   };
 
   // Fit the page so page + transport fit on one screen (min 320px tall on small viewports).
-  const displayWidth = `min(100%, calc(max(320px, 100dvh - 360px) * ${pw} / ${ph}))`;
+  const displayWidth = `min(100%, calc(max(320px, 100dvh - 380px) * ${pw} / ${ph}))`;
 
   return (
     // tabIndex -1: clicking the page focuses the player (not the surrounding tab panel), so the
@@ -242,11 +249,11 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
     <div className="grid gap-4 outline-none" onKeyDown={onPlayerKey} tabIndex={-1} role="region" aria-label="Read-along player">
       <audio ref={audioRef} src={audioSrc} preload="metadata" className="hidden" />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-        {/* Page + highlight overlay */}
-        <div className="grid min-w-0 place-items-center rounded-xl bg-muted/50 p-3 sm:p-5">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+        {/* Page + highlight overlay, on the "desk" */}
+        <div className="relative grid min-w-0 place-items-center overflow-hidden rounded-2xl bg-stage p-4 sm:p-8">
           <div
-            className="relative cursor-pointer overflow-hidden rounded-[3px] bg-white shadow-[0_1px_3px_rgb(0_0_0/0.12),0_8px_24px_-8px_rgb(0_0_0/0.25)]"
+            className="relative cursor-pointer overflow-hidden rounded-[3px] bg-white shadow-[0_1px_2px_rgb(0_0_0/0.12),0_18px_40px_-16px_rgb(0_0_0/0.45)]"
             style={{ aspectRatio: `${pw} / ${ph}`, width: displayWidth }}
             onClick={onPageClick}
             title="Click a sentence to jump to it"
@@ -268,39 +275,44 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
             {boxes.map((b, i) => (
               <HighlightBox key={i} box={b} style={highlightStyle} color={highlightColor} />
             ))}
-            <span className="absolute right-2 bottom-2 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white tabular">Page {page}</span>
           </div>
+          <span className="absolute top-3 left-3 rounded-full bg-background/80 px-2.5 py-1 text-[11px] font-medium text-foreground/80 tabular shadow-sm backdrop-blur">
+            Page {page}
+          </span>
         </div>
 
         {/* Now reading + chapters */}
         <div className="grid min-w-0 content-start gap-4">
-          <div className="grid gap-2 rounded-xl border p-4">
-            <p className="text-xs font-medium text-muted-foreground">Now reading</p>
-            <p className="min-h-[3lh] text-[15px] leading-relaxed" aria-live="off">
-              {current ? current.text : <span className="text-muted-foreground">Press play to start the read-along.</span>}
+          <div className="grid gap-3 rounded-2xl border bg-card p-5 shadow-card">
+            <p className="flex items-center justify-between gap-2 text-[11px] font-medium tracking-[0.12em] text-muted-foreground uppercase">
+              <span>Now reading</span>
+              {playing && <span className="size-1.5 animate-pulse rounded-full bg-brand" aria-hidden />}
+            </p>
+            <p className="min-h-[4lh] font-serif text-[17px] leading-relaxed text-pretty" aria-live="off">
+              {current ? <span className="marker">{current.text}</span> : <span className="text-muted-foreground">Press play to start the read-along.</span>}
             </p>
             <p className="text-xs text-muted-foreground tabular">
               {current ? `Sentence ${idx + 1} of ${segments.length.toLocaleString('en-US')} · Page ${current.page}` : `${segments.length.toLocaleString('en-US')} sentences`}
             </p>
           </div>
 
-          <div className="grid gap-1 rounded-xl border p-2">
-            <p className="px-2 pt-1 pb-1 text-xs font-medium text-muted-foreground">Chapters</p>
-            <ol className="grid max-h-64 gap-0.5 overflow-y-auto lg:max-h-[42vh]">
+          <div className="grid gap-1 rounded-2xl border bg-card p-2 shadow-card">
+            <p className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-[0.12em] text-muted-foreground uppercase">Chapters</p>
+            <ol className="grid max-h-64 gap-0.5 overflow-y-auto scrollbar-thin lg:max-h-[40vh]">
               {chapters.map((c, i) => {
-                const active = chapter?.index === c.index && idx >= 0;
+                const on = chapter?.index === c.index && idx >= 0;
                 return (
                   <li key={c.index}>
                     <button
                       type="button"
                       onClick={() => seek(c.start + EPS)}
                       className={cn(
-                        'flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent',
-                        active && 'bg-brand/20 font-medium hover:bg-brand/25',
+                        'flex w-full items-baseline gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                        on && 'bg-brand/25 font-medium hover:bg-brand/30 dark:bg-brand/15 dark:hover:bg-brand/20',
                       )}
-                      aria-current={active ? 'true' : undefined}
+                      aria-current={on ? 'true' : undefined}
                     >
-                      <span className="w-5 shrink-0 text-xs text-muted-foreground tabular">{i + 1}</span>
+                      <span className="w-5 shrink-0 text-right text-xs text-muted-foreground tabular">{i + 1}</span>
                       <span className="min-w-0 flex-1 truncate" title={c.title}>
                         {c.title}
                       </span>
@@ -315,60 +327,74 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
       </div>
 
       {/* Transport */}
-      <div className="grid gap-3 rounded-xl border p-3 sm:p-4">
-        <div
-          role="slider"
-          tabIndex={0}
-          aria-label="Playback position"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(duration)}
-          aria-valuenow={Math.round(current?.start ?? 0)}
-          aria-valuetext={current ? `${formatClock(current.start)} — ${chapter?.title ?? ''}` : '0:00'}
-          className="group relative h-6 cursor-pointer touch-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          onPointerDown={(e) => {
-            draggingRef.current = true;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            seekFromPointer(e);
-          }}
-          onPointerMove={(e) => draggingRef.current && seekFromPointer(e)}
-          onPointerUp={(e) => {
-            draggingRef.current = false;
-            e.currentTarget.releasePointerCapture(e.pointerId);
-          }}
-          onPointerCancel={() => (draggingRef.current = false)}
-          onKeyDown={onScrubKey}
-        >
-          <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-muted">
-            <div ref={fillRef} className="h-full w-0 bg-primary" />
-          </div>
-          {chapters.slice(1).map((c) => (
-            <span
-              key={c.index}
-              className="absolute top-1/2 h-3 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground/35"
-              style={{ left: `${duration ? (c.start / duration) * 100 : 0}%` }}
-              title={`${c.title} · ${formatClock(c.start)}`}
+      {/* Sticky so the controls stay in reach while the page fills the screen. */}
+      <div className="sticky bottom-3 z-20 grid gap-3 rounded-2xl border bg-card/95 p-3 shadow-float backdrop-blur-md supports-[backdrop-filter]:bg-card/85 sm:p-4">
+        <div className="flex items-center gap-3">
+          <span className="w-12 shrink-0 text-xs text-muted-foreground tabular" ref={timeRef}>
+            0:00
+          </span>
+          <div
+            role="slider"
+            tabIndex={0}
+            aria-label="Playback position"
+            aria-valuemin={0}
+            aria-valuemax={Math.round(duration)}
+            aria-valuenow={Math.round(current?.start ?? 0)}
+            aria-valuetext={current ? `${formatClock(current.start)} — ${chapter?.title ?? ''}` : '0:00'}
+            className="group relative h-6 flex-1 cursor-pointer touch-none rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            onPointerDown={(e) => {
+              draggingRef.current = true;
+              e.currentTarget.setPointerCapture(e.pointerId);
+              seekFromPointer(e);
+            }}
+            onPointerMove={(e) => draggingRef.current && seekFromPointer(e)}
+            onPointerUp={(e) => {
+              draggingRef.current = false;
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }}
+            onPointerCancel={() => (draggingRef.current = false)}
+            onKeyDown={onScrubKey}
+          >
+            <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-foreground/10 transition-[height] group-hover:h-2">
+              <div ref={fillRef} className="h-full w-0 rounded-full bg-foreground" />
+            </div>
+            {chapters.slice(1).map((c) => (
+              <span
+                key={c.index}
+                className="absolute top-1/2 h-3 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-card"
+                style={{ left: `${duration ? (c.start / duration) * 100 : 0}%` }}
+                title={`${c.title} · ${formatClock(c.start)}`}
+              />
+            ))}
+            <div
+              ref={thumbRef}
+              className="pointer-events-none absolute top-1/2 left-0 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-foreground bg-background shadow-sm transition-transform group-hover:scale-110"
             />
-          ))}
-          <div ref={thumbRef} className="pointer-events-none absolute top-1/2 left-0 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-background shadow-sm transition-transform group-hover:scale-110" />
+          </div>
+          <span className="w-12 shrink-0 text-right text-xs text-muted-foreground tabular">{formatClock(duration)}</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon-sm" onClick={prevSentence} aria-label="Previous sentence" title="Previous sentence (←)">
-              <SkipBack aria-hidden />
+          <div className="flex items-center gap-1.5">
+            <Button variant="ghost" size="icon" className="rounded-full" onClick={prevSentence} aria-label="Previous sentence" title="Previous sentence (←)">
+              <SkipBack className="fill-current" aria-hidden />
             </Button>
-            <Button size="icon" className="rounded-full" onClick={toggle} aria-label={playing ? 'Pause' : 'Play'} title="Play / pause (space)" disabled={audioState === 'error'}>
+            <Button
+              variant="brand"
+              size="icon"
+              className="size-12 rounded-full [&_svg:not([class*='size-'])]:size-5"
+              onClick={toggle}
+              aria-label={playing ? 'Pause' : 'Play'}
+              title="Play / pause (space)"
+              disabled={audioState === 'error'}
+            >
               {playing ? <Pause className="fill-current" aria-hidden /> : <Play className="translate-x-px fill-current" aria-hidden />}
             </Button>
-            <Button variant="ghost" size="icon-sm" onClick={nextSentence} aria-label="Next sentence" title="Next sentence (→)">
-              <SkipForward aria-hidden />
+            <Button variant="ghost" size="icon" className="rounded-full" onClick={nextSentence} aria-label="Next sentence" title="Next sentence (→)">
+              <SkipForward className="fill-current" aria-hidden />
             </Button>
           </div>
-          <span className="text-sm tabular">
-            <span ref={timeRef}>0:00</span>
-            <span className="text-muted-foreground"> / {formatClock(duration)}</span>
-          </span>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex min-w-0 items-center gap-1">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -379,7 +405,7 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
             >
               <ChevronsLeft aria-hidden />
             </Button>
-            <span className="hidden max-w-48 truncate text-xs text-muted-foreground sm:inline" title={chapter?.title}>
+            <span className="hidden max-w-52 min-w-0 truncate text-xs text-muted-foreground sm:inline" title={chapter?.title}>
               {chapter ? chapter.title : ''}
             </span>
             <Button
@@ -395,7 +421,7 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
             <Button
               variant="outline"
               size="sm"
-              className="w-14 tabular"
+              className="ml-1 w-14 rounded-full tabular"
               onClick={() => setRate((r) => RATES[(RATES.indexOf(r) + 1) % RATES.length])}
               aria-label={`Playback speed ${rate}×`}
               title="Playback speed"
@@ -409,10 +435,18 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
             <TriangleAlert className="size-3.5" aria-hidden /> The narration (audiobook.m4a) could not be loaded. It may still be generating, or the API is not running.
           </p>
         )}
-        <p className="text-[11px] text-muted-foreground">
-          Tip: click any sentence on the page to jump there · ←/→ previous/next sentence · space to play/pause · {formatDuration(duration)} total
-        </p>
       </div>
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1 text-xs text-muted-foreground">
+        <span>Click any sentence on the page to jump there</span>
+        <span className="flex items-center gap-1">
+          <Kbd>←</Kbd>
+          <Kbd>→</Kbd> sentence
+        </span>
+        <span className="flex items-center gap-1">
+          <Kbd>Space</Kbd> play / pause
+        </span>
+        <span className="tabular sm:ml-auto">{formatDuration(duration)} total</span>
+      </p>
     </div>
   );
 }

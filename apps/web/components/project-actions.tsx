@@ -1,20 +1,95 @@
 'use client';
 
 import type { ProjectDetail } from '@app/types';
-import { CircleX, Eraser, LoaderCircle, Play, RotateCcw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import { CircleX, Download, Ellipsis, Eraser, ListChecks, LoaderCircle, Play, RotateCcw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useCallback, useId, useState } from 'react';
 import { ApiErrorAlert, ErrorHint } from '@/components/api-error-alert';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
-import { type ApiError, api, toApiError } from '@/lib/api';
+import { type ApiError, api, apiUrl, toApiError } from '@/lib/api';
 import { formatBytes } from '@/lib/format';
 import { type Phase, projectError, projectPhase, retryLabel } from '@/lib/stages';
+import { cn } from '@/lib/utils';
 
 type Action = 'start' | 'retry' | 'restart' | 'cancel' | 'clean' | 'delete';
+type DialogKind = 'restart' | 'clean' | 'delete';
+
+export interface ProjectCommands {
+  busy: Action | null;
+  error?: ApiError;
+  dialog: DialogKind | null;
+  openDialog: (d: DialogKind | null) => void;
+  run: (action: Action, fn: () => Promise<unknown>, after?: (r: unknown) => void) => Promise<void>;
+}
+
+/** Shared state for the project's actions, so the header and the failure alert never both run one. */
+export function useProjectCommands(onChanged: () => void): ProjectCommands {
+  const [busy, setBusy] = useState<Action | null>(null);
+  const [error, setError] = useState<ApiError>();
+  const [dialog, setDialog] = useState<DialogKind | null>(null);
+
+  const run = useCallback(
+    async (action: Action, fn: () => Promise<unknown>, after?: (r: unknown) => void) => {
+      setBusy(action);
+      setError(undefined);
+      try {
+        const r = await fn();
+        setDialog(null);
+        after?.(r);
+        if (action !== 'delete') onChanged(); // a deleted project has nothing left to re-fetch
+      } catch (e) {
+        setError(toApiError(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [onChanged],
+  );
+  const openDialog = useCallback((d: DialogKind | null) => {
+    setDialog(d);
+    setError(undefined);
+  }, []);
+
+  return { busy, error, dialog, openDialog, run };
+}
+
+function RetryButton({ project, cmds, className }: { project: ProjectDetail; cmds: ProjectCommands; className?: string }) {
+  const err = projectError(project);
+  return (
+    <Button onClick={() => void cmds.run('retry', () => api.retry(project.id))} disabled={!!cmds.busy} variant={err?.retryable === false ? 'outline' : 'default'} className={className}>
+      {cmds.busy === 'retry' ? <LoaderCircle className="animate-spin" aria-hidden /> : <RotateCcw aria-hidden />} {retryLabel(err, project.steps)}
+    </Button>
+  );
+}
+
+/** The failed run's error, what to do about it and a retry that continues from the failed step. */
+export function FailureAlert({ project, cmds, onReviewSettings }: { project: ProjectDetail; cmds: ProjectCommands; onReviewSettings: () => void }) {
+  const err = projectError(project);
+  if (projectPhase(project) !== 'failed' || !err) return null;
+  return (
+    <Alert variant="destructive">
+      <CircleX aria-hidden />
+      <AlertTitle>{err.message}</AlertTitle>
+      <AlertDescription>
+        <ErrorHint hint={err.hint} />
+        {err.retryable === false && <p>Retrying with the same settings will not fix this — change the settings (or the PDF) first.</p>}
+        <div className="mt-2 flex flex-wrap gap-2 text-foreground">
+          {err.retryable === false && (
+            <Button onClick={onReviewSettings}>
+              <SlidersHorizontal aria-hidden /> Review settings
+            </Button>
+          )}
+          <RetryButton project={project} cmds={cmds} />
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 function ConfirmDialog({
   open,
@@ -45,7 +120,7 @@ function ConfirmDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription asChild>
-            <div className="grid gap-2">{description}</div>
+            <div className="grid gap-2 leading-relaxed">{description}</div>
           </DialogDescription>
         </DialogHeader>
         {children}
@@ -66,111 +141,99 @@ function ConfirmDialog({
 
 export interface ProjectActionsProps {
   project: ProjectDetail;
-  /** Called after an action changed server state (re-fetch + resume polling). */
-  onChanged: () => void;
+  cmds: ProjectCommands;
   /** Informational result, e.g. "Freed 120 MB". */
   onNotice: (message: string) => void;
+  /** Open the chapter review (pending review, or editing the chapters of a finished run). */
+  onReviewChapters: () => void;
+  className?: string;
 }
 
-/** Start/Resume, Retry, Cancel, Restart, Clean cache and Delete — with confirmations for the destructive ones. */
-export function ProjectActions({ project, onChanged, onNotice }: ProjectActionsProps) {
+/**
+ * The project's primary action for its phase (Start / Cancel / Retry / Resume / Download) plus a
+ * menu with Restart, Clean cache and Delete — with confirmations for the destructive ones.
+ */
+export function ProjectActions({ project, cmds, onNotice, onReviewChapters, className }: ProjectActionsProps) {
   const router = useRouter();
   const phase: Phase = projectPhase(project);
-  const [busy, setBusy] = useState<Action | null>(null);
-  const [error, setError] = useState<ApiError>();
-  const [dialog, setDialog] = useState<'restart' | 'clean' | 'delete' | null>(null);
   const [deleteOutputs, setDeleteOutputs] = useState(false);
   const deleteId = useId();
   const running = phase === 'active' || phase === 'queued';
-  const err = projectError(project);
-
-  const run = async (action: Action, fn: () => Promise<unknown>, after?: (r: unknown) => void) => {
-    setBusy(action);
-    setError(undefined);
-    try {
-      const r = await fn();
-      setDialog(null);
-      after?.(r);
-      if (action !== 'delete') onChanged(); // a deleted project has nothing left to re-fetch
-    } catch (e) {
-      setError(toApiError(e));
-    } finally {
-      setBusy(null);
-    }
-  };
+  const { busy, error, dialog, openDialog, run } = cmds;
 
   const hasOutputs = project.outputs.some((o) => o.kind === 'video' || o.kind === 'audio');
+  const main = project.outputs.find((o) => o.name === 'audiobook.mp4') ?? project.outputs.find((o) => o.name === 'audiobook.m4a');
+  const canEditChapters = !!project.analysisKey && (phase === 'completed' || phase === 'failed' || phase === 'cancelled');
 
-  const retryButton = (
-    <Button onClick={() => void run('retry', () => api.retry(project.id))} disabled={!!busy} variant={err?.retryable === false ? 'outline' : 'default'}>
-      {busy === 'retry' ? <LoaderCircle className="animate-spin" aria-hidden /> : <RotateCcw aria-hidden />} {retryLabel(err, project.steps)}
-    </Button>
-  );
+  let primary: ReactNode = null;
+  if (phase === 'idle')
+    primary = (
+      <Button variant="brand" onClick={() => void run('start', () => api.process(project.id))} disabled={!!busy}>
+        {busy === 'start' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Play className="fill-current" aria-hidden />} Start processing
+      </Button>
+    );
+  else if (phase === 'review')
+    primary = (
+      <Button variant="brand" onClick={onReviewChapters}>
+        <ListChecks aria-hidden /> Review chapters
+      </Button>
+    );
+  else if (phase === 'cancelled')
+    primary = (
+      <Button onClick={() => void run('start', () => api.process(project.id))} disabled={!!busy}>
+        {busy === 'start' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Play className="fill-current" aria-hidden />} Resume
+      </Button>
+    );
+  // With a known error the failure alert below carries the retry, next to the explanation.
+  else if (phase === 'failed' && !projectError(project)) primary = <RetryButton project={project} cmds={cmds} />;
+  else if (running)
+    primary = (
+      <Button variant="outline" onClick={() => void run('cancel', () => api.cancel(project.id))} disabled={!!busy}>
+        {busy === 'cancel' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Square className="size-3.5 fill-current" aria-hidden />} Cancel
+      </Button>
+    );
+  else if (phase === 'completed' && main)
+    primary = (
+      <Button asChild variant="brand">
+        <a href={apiUrl(main.url)} download={main.name}>
+          <Download aria-hidden /> Download {main.name.endsWith('.mp4') ? 'video' : 'audiobook'}
+        </a>
+      </Button>
+    );
 
   return (
-    <div className="grid gap-3">
-      {phase === 'failed' && err && (
-        <Alert variant="destructive">
-          <CircleX aria-hidden />
-          <AlertTitle>{err.message}</AlertTitle>
-          <AlertDescription>
-            <ErrorHint hint={err.hint} />
-            {err.retryable === false && <p>Retrying with the same settings will not fix this — change the settings (or the PDF) first.</p>}
-            <div className="mt-2 flex flex-wrap gap-2 text-foreground">
-              {err.retryable === false && (
-                <Button asChild>
-                  <a href="#settings">
-                    <SlidersHorizontal aria-hidden /> Review settings
-                  </a>
-                </Button>
-              )}
-              {retryButton}
-            </div>
-          </AlertDescription>
-        </Alert>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        {phase === 'idle' && (
-          <Button onClick={() => void run('start', () => api.process(project.id))} disabled={!!busy}>
-            {busy === 'start' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Play aria-hidden />} Start processing
+    <div className={cn('flex flex-wrap items-center gap-2', className)}>
+      {primary}
+      {/* modal={false}: a dialog opened from a menu item must not fight the menu over focus */}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="icon" aria-label="More actions" title="More actions">
+            <Ellipsis aria-hidden />
           </Button>
-        )}
-        {phase === 'cancelled' && (
-          <Button onClick={() => void run('start', () => api.process(project.id))} disabled={!!busy}>
-            {busy === 'start' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Play aria-hidden />} Resume
-          </Button>
-        )}
-        {phase === 'failed' && !err && retryButton}
-        {running && (
-          <Button variant="outline" onClick={() => void run('cancel', () => api.cancel(project.id))} disabled={!!busy}>
-            {busy === 'cancel' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Square className="fill-current" aria-hidden />} Cancel
-          </Button>
-        )}
-        {!running && phase !== 'idle' && (
-          <Button variant="outline" onClick={() => setDialog('restart')} disabled={!!busy}>
-            <RotateCcw aria-hidden /> Restart
-          </Button>
-        )}
-        {!running && (
-          <Button variant="ghost" onClick={() => setDialog('clean')} disabled={!!busy} className="text-muted-foreground">
-            <Eraser aria-hidden /> Clean project cache
-          </Button>
-        )}
-        {!running && (
-          <Button variant="ghost" onClick={() => setDialog('delete')} disabled={!!busy} className="text-muted-foreground hover:text-destructive">
-            <Trash2 aria-hidden /> Delete
-          </Button>
-        )}
-      </div>
-      {running && <p className="text-xs text-muted-foreground">Settings, cache cleaning and deletion are available once processing stops.</p>}
-      {error && !dialog && <ApiErrorAlert error={error} />}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-60">
+          {running && <DropdownMenuLabel className="font-normal">Available once processing stops</DropdownMenuLabel>}
+          {canEditChapters && (
+            <DropdownMenuItem onSelect={onReviewChapters}>
+              <ListChecks aria-hidden /> Review chapters
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onSelect={() => openDialog('restart')} disabled={running || phase === 'idle' || !!busy}>
+            <RotateCcw aria-hidden /> Restart from scratch…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openDialog('clean')} disabled={running || !!busy}>
+            <Eraser aria-hidden /> Clean project cache…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onSelect={() => openDialog('delete')} disabled={running || !!busy}>
+            <Trash2 aria-hidden /> Delete project…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <ConfirmDialog
         open={dialog === 'restart'}
-        onOpenChange={(o) => {
-          setDialog(o ? 'restart' : null);
-          setError(undefined);
-        }}
+        onOpenChange={(o) => openDialog(o ? 'restart' : null)}
         title="Restart from scratch?"
         description={
           <>
@@ -186,10 +249,7 @@ export function ProjectActions({ project, onChanged, onNotice }: ProjectActionsP
 
       <ConfirmDialog
         open={dialog === 'clean'}
-        onOpenChange={(o) => {
-          setDialog(o ? 'clean' : null);
-          setError(undefined);
-        }}
+        onOpenChange={(o) => openDialog(o ? 'clean' : null)}
         title="Clean project cache?"
         description={
           <>
@@ -213,9 +273,8 @@ export function ProjectActions({ project, onChanged, onNotice }: ProjectActionsP
       <ConfirmDialog
         open={dialog === 'delete'}
         onOpenChange={(o) => {
-          setDialog(o ? 'delete' : null);
+          openDialog(o ? 'delete' : null);
           setDeleteOutputs(false);
-          setError(undefined);
         }}
         title={`Delete “${project.name}”?`}
         description={
@@ -237,7 +296,7 @@ export function ProjectActions({ project, onChanged, onNotice }: ProjectActionsP
         }
       >
         {hasOutputs && (
-          <div className="flex items-start gap-2.5 rounded-lg border p-3">
+          <div className="flex items-start gap-2.5 rounded-xl border p-3">
             <Checkbox id={deleteId} checked={deleteOutputs} onCheckedChange={(c) => setDeleteOutputs(c === true)} className="mt-0.5" />
             <div className="grid gap-1">
               <Label htmlFor={deleteId}>Also delete the final outputs</Label>

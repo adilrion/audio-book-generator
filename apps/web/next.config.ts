@@ -15,5 +15,7 @@ export default function config(phase: string): NextConfig {
     // This app has no ESLint setup; type-checking still runs during `next build`.
     eslint: { ignoreDuringBuilds: true },
     poweredByHeader: false,
+    // The dev-tools badge sits bottom-left by default, on top of the sidebar's power widget.
+    devIndicators: { position: 'bottom-right' },
   };
 }

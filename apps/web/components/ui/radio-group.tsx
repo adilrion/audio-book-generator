@@ -34,7 +34,7 @@ function RadioCard({ className, children, ...props }: React.ComponentProps<typeo
     <RadioGroupPrimitive.Item
       data-slot="radio-card"
       className={cn(
-        'group relative flex w-full flex-col items-start gap-1 rounded-lg border bg-card p-3 text-left text-sm shadow-xs transition-[color,box-shadow,border-color] outline-none hover:bg-accent/50 focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:ring-1 data-[state=checked]:ring-primary dark:bg-input/20',
+        'group relative flex w-full flex-col items-start gap-1 rounded-xl border bg-card p-3.5 text-left text-sm shadow-xs transition-[color,box-shadow,border-color,background-color] outline-none hover:border-foreground/20 hover:bg-accent/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-foreground/70 data-[state=checked]:bg-accent/40 data-[state=checked]:ring-1 data-[state=checked]:ring-foreground/70 dark:bg-input/10 dark:data-[state=checked]:bg-input/25',
         className,
       )}
       {...props}

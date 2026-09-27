@@ -11,11 +11,12 @@ import {
   type TTSEngineName,
   type VideoTheme,
 } from '@app/types';
-import { Captions, Film, Headphones, Info, LoaderCircle, Mic, Palette, ScanText, Sparkles, TriangleAlert } from 'lucide-react';
+import { Captions, Check, Crosshair, Film, Headphones, Info, LoaderCircle, type LucideIcon, Mic, Move, Palette, ScanText, Sparkles, Square, TriangleAlert } from 'lucide-react';
 import { type ReactNode, useEffect, useId, useState } from 'react';
 import { CommandSnippet } from '@/components/copy-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioCard, RadioGroup } from '@/components/ui/radio-group';
@@ -26,8 +27,8 @@ import { Switch } from '@/components/ui/switch';
 import { useApi } from '@/hooks/use-api';
 import { api, type SystemConfig } from '@/lib/api';
 import { highlightStyleCss } from '@/lib/highlight';
-import { cloneSettings } from '@/lib/settings';
 import { splitHint } from '@/lib/hint';
+import { cloneSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
 import { ENGINE_LABELS, groupVoices, pickVoice, voiceMeta } from '@/lib/voices';
 
@@ -39,10 +40,10 @@ const ASPECTS: { value: AspectRatio; label: string; hint: string }[] = [
   { value: '1:1', label: '1:1', hint: 'Square · 1080×1080' },
 ];
 
-const ANIMATIONS: { value: AnimationStyle; label: string; hint: string }[] = [
-  { value: 'follow', label: 'Follow the text', hint: 'Gentle zoom and pan towards the sentence being read' },
-  { value: 'kenburns', label: 'Ken Burns', hint: 'Slow, continuous zoom and drift across the page' },
-  { value: 'static', label: 'Static', hint: 'Whole page, no motion' },
+const ANIMATIONS: { value: AnimationStyle; label: string; hint: string; icon: LucideIcon }[] = [
+  { value: 'follow', label: 'Follow the text', hint: 'Gentle zoom and pan towards the sentence being read', icon: Crosshair },
+  { value: 'kenburns', label: 'Ken Burns', hint: 'Slow, continuous zoom and drift across the page', icon: Move },
+  { value: 'static', label: 'Static', hint: 'Whole page, no motion', icon: Square },
 ];
 
 export const THEMES: { value: VideoTheme; label: string; bg: string; page: string; ink: string }[] = [
@@ -71,24 +72,47 @@ export { validateSettings } from '@/lib/settings';
 
 // ─────────────────────────────── layout helpers ───────────────────────────────
 
-function Section({ icon, title, description, children, className }: { icon: ReactNode; title: string; description?: ReactNode; children: ReactNode; className?: string }) {
+export function FormSection({
+  icon,
+  step,
+  title,
+  description,
+  children,
+  className,
+  id,
+}: {
+  icon?: ReactNode;
+  step?: number;
+  title: string;
+  description?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  id?: string;
+}) {
+  const headingId = useId();
   return (
-    <section className={cn('grid gap-4', className)}>
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground [&_svg]:size-4">{icon}</span>
-        <div className="grid gap-0.5">
-          <h3 className="text-sm font-semibold">{title}</h3>
+    <section id={id} aria-labelledby={headingId} className={cn('scroll-mt-24 rounded-2xl border bg-card shadow-card', className)}>
+      <header className="flex items-start gap-3.5 px-5 pt-5 pb-1 sm:px-6 sm:pt-6">
+        {step !== undefined ? (
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-foreground text-[13px] font-semibold text-background tabular">{step}</span>
+        ) : (
+          <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-4">{icon}</span>
+        )}
+        <div className="grid gap-0.5 pt-0.5">
+          <h2 id={headingId} className="text-[15px] leading-tight font-semibold tracking-tight">
+            {title}
+          </h2>
           {description && <p className="text-sm text-muted-foreground">{description}</p>}
         </div>
-      </div>
-      <div className="grid gap-5 sm:pl-10">{children}</div>
+      </header>
+      <div className="grid gap-6 px-5 pt-4 pb-5 sm:px-6 sm:pb-6 sm:pl-[4.25rem]">{children}</div>
     </section>
   );
 }
 
 function Field({ label, htmlFor, hint, children, className }: { label: ReactNode; htmlFor?: string; hint?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <div className={cn('grid gap-2', className)}>
+    <div className={cn('grid gap-2.5', className)}>
       <Label htmlFor={htmlFor} className="text-[13px]">
         {label}
       </Label>
@@ -98,29 +122,39 @@ function Field({ label, htmlFor, hint, children, className }: { label: ReactNode
   );
 }
 
+/** Grouped on/off settings, macOS-settings style. */
+function ToggleList({ children }: { children: ReactNode }) {
+  return <div className="divide-y overflow-hidden rounded-xl border">{children}</div>;
+}
+
 function ToggleRow({
   label,
   description,
   checked,
   onCheckedChange,
   disabled,
+  children,
 }: {
   label: ReactNode;
   description?: ReactNode;
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
   disabled?: boolean;
+  children?: ReactNode;
 }) {
   const id = useId();
   return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="grid gap-1">
-        <Label htmlFor={id} className="text-[13px]">
-          {label}
-        </Label>
-        {description && <p className="text-xs text-muted-foreground">{description}</p>}
+    <div className="grid gap-3 px-4 py-3.5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="grid gap-1">
+          <Label htmlFor={id} className="text-[13px]">
+            {label}
+          </Label>
+          {description && <p className="text-xs leading-relaxed text-muted-foreground">{description}</p>}
+        </div>
+        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} className="mt-0.5" />
       </div>
-      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} className="mt-0.5" />
+      {children}
     </div>
   );
 }
@@ -130,43 +164,56 @@ function AspectShape({ ratio }: { ratio: AspectRatio }) {
   const scale = 26 / Math.max(width, height);
   return (
     <span className="grid size-8 place-items-center" aria-hidden>
-      <span className="rounded-[3px] border-2 border-current opacity-70" style={{ width: width * scale, height: height * scale }} />
+      <span className="rounded-[3px] border-2 border-current opacity-70 group-data-[state=checked]:opacity-100" style={{ width: width * scale, height: height * scale }} />
+    </span>
+  );
+}
+
+function CheckedMark() {
+  return (
+    <span
+      className="absolute top-2.5 right-2.5 hidden size-4 place-items-center rounded-full bg-foreground text-background group-data-[state=checked]:grid"
+      aria-hidden
+    >
+      <Check className="size-2.5" strokeWidth={3} />
     </span>
   );
 }
 
 // ─────────────────────────────── highlight preview ───────────────────────────────
 
-function LookPreview({ settings }: { settings: ProjectSettings }) {
+/** Live mock-up of one video frame: theme, format, highlight style/colour, chapter title and progress bar. */
+export function LookPreview({ settings, className }: { settings: ProjectSettings; className?: string }) {
   const v = settings.video;
   const theme = THEMES.find((t) => t.value === v.theme) ?? THEMES[0];
   const hl = highlightStyleCss(v.highlightStyle, v.highlightColor);
   const para = v.highlightMode === 'paragraph';
   const { width, height } = ASPECT_SIZES[v.aspectRatio];
   return (
-    <div className="grid gap-2">
-      <p className="text-xs font-medium text-muted-foreground">Preview</p>
-      <div className="mx-auto w-full max-w-[340px]">
-        <div className="relative overflow-hidden rounded-lg border shadow-xs" style={{ background: theme.bg, aspectRatio: `${width} / ${height}` }} aria-hidden>
-          <div className="absolute inset-y-[9%] left-1/2 flex aspect-[2/3] -translate-x-1/2 flex-col gap-[6%] rounded-sm bg-white p-[5%] shadow-md" style={{ color: theme.ink }}>
-            {v.showChapterTitle && <p className="text-[9px] leading-tight font-semibold">Chapter 1: The Beginning</p>}
-            <p className="text-[7px] leading-[1.55]">
-              <span style={para ? hl : undefined}>
-                The Industrial Revolution began in Britain.{' '}
-                <span className="rounded-[1px]" style={para ? undefined : hl}>
-                  Steam engines changed how goods were made and moved.
-                </span>{' '}
-                Cities grew quickly around the new mills.
-              </span>
-            </p>
-            <p className="text-[7px] leading-[1.55] opacity-80">Within a few decades the new methods had spread across Europe and beyond.</p>
-          </div>
-          {v.showProgress && (
-            <div className="absolute inset-x-0 bottom-0 h-[3%] min-h-[3px]" style={{ background: v.theme === 'dark' ? 'rgb(255 255 255 / 0.15)' : 'rgb(0 0 0 / 0.1)' }}>
-              <div className="h-full w-[38%]" style={{ background: v.highlightColor }} />
-            </div>
-          )}
+    <div className={cn('mx-auto w-full', v.aspectRatio === '9:16' ? 'max-w-[200px]' : v.aspectRatio === '1:1' ? 'max-w-[280px]' : 'max-w-[360px]', className)}>
+      <div
+        className="relative overflow-hidden rounded-xl [container-type:size] shadow-[0_0_0_1px_rgb(0_0_0/0.08),0_10px_30px_-12px_rgb(0_0_0/0.4)]"
+        style={{ background: theme.bg, aspectRatio: `${width} / ${height}` }}
+        aria-hidden
+      >
+        <div className="absolute inset-y-[9%] left-1/2 flex aspect-[2/3] -translate-x-1/2 flex-col gap-[2.6cqh] rounded-[2px] bg-white p-[3.2cqh] shadow-md" style={{ color: theme.ink }}>
+          {v.showChapterTitle && <p className="font-serif text-[4.4cqh] leading-tight font-semibold">Chapter 1: The Beginning</p>}
+          <p className="font-serif text-[3.3cqh] leading-[1.5]">
+            <span style={para ? hl : undefined}>
+              The Industrial Revolution began in Britain.{' '}
+              <span className="rounded-[1px]" style={para ? undefined : hl}>
+                Steam engines changed how goods were made and moved.
+              </span>{' '}
+              Cities grew quickly around the new mills.
+            </span>
+          </p>
+          <p className="font-serif text-[3.3cqh] leading-[1.5] opacity-80">Within a few decades the new methods had spread across Europe and beyond.</p>
         </div>
+        {v.showProgress && (
+          <div className="absolute inset-x-0 bottom-0 h-[3%] min-h-[3px]" style={{ background: v.theme === 'dark' ? 'rgb(255 255 255 / 0.15)' : 'rgb(0 0 0 / 0.1)' }}>
+            <div className="h-full w-[38%]" style={{ background: v.highlightColor }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -180,7 +227,6 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
   const engines: TTSEngineName[] = config?.engines?.length ? config.engines : ['kokoro', 'piper', 'say'];
   const list = voices.data?.engine === engine ? voices.data.voices : [];
   const groups = groupVoices(list, settings.language);
-  const engineId = useId();
   const voiceId = useId();
 
   // If the chosen voice is not installed for this engine, switch to the engine's default/first voice —
@@ -203,80 +249,77 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
 
   return (
     <>
-      <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Voice engine" htmlFor={engineId}>
-          <Select
-            value={engine}
-            disabled={disabled}
-            onValueChange={(e) =>
-              update((d) => {
-                d.tts.engine = e as TTSEngineName;
-                d.tts.voice = config?.defaultVoices?.[e as TTSEngineName] ?? '';
-              })
-            }
-          >
-            <SelectTrigger id={engineId}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {engines.map((e) => (
-                <SelectItem key={e} value={e}>
-                  <span className="shrink-0 font-medium">{ENGINE_LABELS[e]?.name ?? e}</span>
-                  <span className="min-w-0 truncate text-muted-foreground">{ENGINE_LABELS[e]?.description}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field
-          label={
-            <>
-              Voice
-              {voices.loading && <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label="Loading voices" />}
-            </>
+      <Field label="Voice engine">
+        <RadioGroup
+          aria-label="Voice engine"
+          value={engine}
+          disabled={disabled}
+          onValueChange={(e) =>
+            update((d) => {
+              d.tts.engine = e as TTSEngineName;
+              d.tts.voice = config?.defaultVoices?.[e as TTSEngineName] ?? '';
+            })
           }
-          htmlFor={voiceId}
+          className={cn('grid gap-2', engines.length >= 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}
         >
-          <Select value={list.some((v) => v.id === currentVoice) ? currentVoice : undefined} disabled={disabled || !list.length} onValueChange={(v) => update((d) => void (d.tts.voice = v))}>
-            <SelectTrigger id={voiceId}>
-              <SelectValue placeholder={voices.loading ? 'Loading voices…' : unavailable ? 'Engine not installed' : currentVoice || 'Choose a voice'} />
-            </SelectTrigger>
-            <SelectContent className="max-h-80">
-              {groups.map((g, gi) => (
-                <SelectGroup key={g.language}>
-                  {gi > 0 && <SelectSeparator />}
-                  <SelectLabel>
-                    {g.label}
-                    {g.language !== settings.language && gi > 0 && groups[0]?.language === settings.language ? ' · other language' : ''}
-                  </SelectLabel>
-                  {g.voices.map((v) => (
-                    <SelectItem key={v.id} value={v.id}>
-                      <span className="shrink-0 font-medium">{v.name}</span>
-                      {voiceMeta(v) && <span className="min-w-0 truncate text-muted-foreground">{voiceMeta(v)}</span>}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-      </div>
+          {engines.map((e) => (
+            <RadioCard key={e} value={e} className="pr-8">
+              <CheckedMark />
+              <span className="font-medium">{ENGINE_LABELS[e]?.name ?? e}</span>
+              <span className="text-xs leading-snug text-muted-foreground">{ENGINE_LABELS[e]?.description}</span>
+            </RadioCard>
+          ))}
+        </RadioGroup>
+      </Field>
 
-      {replacedNote && (
-        <p className="-mt-2 flex items-start gap-1.5 text-xs text-muted-foreground" role="status">
-          <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-          <span>
-            The voice “{replacedNote.from}” is not installed for {ENGINE_LABELS[engine]?.name ?? engine}, so{' '}
-            {list.find((v) => v.id === replacedNote.to)?.name ?? replacedNote.to} is selected instead.
-          </span>
-        </p>
-      )}
-      {voices.error && !voices.data && (
-        <p className="flex items-center gap-1.5 text-xs text-destructive">
-          <TriangleAlert className="size-3.5" aria-hidden /> {voices.error.message}
-        </p>
-      )}
+      <Field
+        label={
+          <>
+            Voice
+            {voices.loading && <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-label="Loading voices" />}
+          </>
+        }
+        htmlFor={voiceId}
+        className="sm:max-w-md"
+      >
+        <Select value={list.some((v) => v.id === currentVoice) ? currentVoice : undefined} disabled={disabled || !list.length} onValueChange={(v) => update((d) => void (d.tts.voice = v))}>
+          <SelectTrigger id={voiceId} className="h-10">
+            <SelectValue placeholder={voices.loading ? 'Loading voices…' : unavailable ? 'Engine not installed' : currentVoice || 'Choose a voice'} />
+          </SelectTrigger>
+          <SelectContent className="max-h-80">
+            {groups.map((g, gi) => (
+              <SelectGroup key={g.language}>
+                {gi > 0 && <SelectSeparator />}
+                <SelectLabel>
+                  {g.label}
+                  {g.language !== settings.language && gi > 0 && groups[0]?.language === settings.language ? ' · other language' : ''}
+                </SelectLabel>
+                {g.voices.map((v) => (
+                  <SelectItem key={v.id} value={v.id}>
+                    <span className="shrink-0 font-medium">{v.name}</span>
+                    {voiceMeta(v) && <span className="min-w-0 truncate text-muted-foreground">{voiceMeta(v)}</span>}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+        {replacedNote && (
+          <p className="flex items-start gap-1.5 text-xs text-muted-foreground" role="status">
+            <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+            <span>
+              The voice “{replacedNote.from}” is not installed for {ENGINE_LABELS[engine]?.name ?? engine}, so{' '}
+              {list.find((v) => v.id === replacedNote.to)?.name ?? replacedNote.to} is selected instead.
+            </span>
+          </p>
+        )}
+        {voices.error && !voices.data && (
+          <p className="flex items-center gap-1.5 text-xs text-destructive">
+            <TriangleAlert className="size-3.5" aria-hidden /> {voices.error.message}
+          </p>
+        )}
+      </Field>
+
       {unavailable && (
         <Alert variant="warning">
           <TriangleAlert aria-hidden />
@@ -303,10 +346,12 @@ export interface SettingsFormProps {
   document?: { likelyScanned?: boolean; hasToc?: boolean };
   /** Number of chapters detected (after analysis), for the chapter-range hint. */
   chapterCount?: number;
+  /** Number the sections from this step (the new-audiobook flow); icons otherwise. */
+  firstStep?: number;
   className?: string;
 }
 
-export function SettingsForm({ value, onChange, config, disabled, document, chapterCount, className }: SettingsFormProps) {
+export function SettingsForm({ value, onChange, config, disabled, document, chapterCount, firstStep, className }: SettingsFormProps) {
   const update = (fn: (draft: ProjectSettings) => void) => {
     const next = cloneSettings(value);
     fn(next);
@@ -319,35 +364,42 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
   const range = t.chapterRange;
   const rangeError = range && (range.from < 1 || range.to < 1 || range.from > range.to) ? 'The first chapter must be 1 or higher and not after the last.' : undefined;
   const llmOff = config && !config.llm.enabled;
+  const step = (n: number) => (firstStep === undefined ? undefined : firstStep + n);
 
   return (
-    <fieldset disabled={disabled} className={cn('grid min-w-0 gap-8', className)}>
+    <fieldset disabled={disabled} className={cn('grid min-w-0 gap-6', className)}>
       {/* ── Output ── */}
-      <Section icon={<Film />} title="Output" description="What to produce from the book.">
+      <FormSection id="output" step={step(0)} icon={<Film />} title="Output" description="What to produce from the book.">
         <RadioGroup aria-label="Output" value={value.outputMode} onValueChange={(m) => update((d) => void (d.outputMode = m as ProjectSettings['outputMode']))} className="grid gap-3 sm:grid-cols-2">
-          <RadioCard value="audiobook_video">
-            <span className="flex w-full items-center gap-2 font-medium">
-              <Film className="size-4 text-muted-foreground" aria-hidden /> Audiobook + Animated PDF
-              <Badge variant="secondary" className="ml-auto">
+          <RadioCard value="audiobook_video" className="gap-2 pr-9">
+            <CheckedMark />
+            <span className="grid size-9 place-items-center rounded-lg bg-muted text-muted-foreground transition-colors group-data-[state=checked]:bg-brand group-data-[state=checked]:text-brand-foreground">
+              <Film className="size-[18px]" aria-hidden />
+            </span>
+            <span className="flex flex-wrap items-center gap-2 font-medium">
+              Audiobook + animated PDF
+              <Badge variant="muted" className="px-1.5 py-0 text-[10px]">
                 Default
               </Badge>
             </span>
-            <span className="text-xs text-muted-foreground">Read-along MP4 with the spoken sentence highlighted, plus M4A audio and SRT subtitles.</span>
+            <span className="text-xs leading-relaxed text-muted-foreground">Read-along MP4 with the spoken sentence highlighted, plus M4A audio and SRT subtitles.</span>
           </RadioCard>
-          <RadioCard value="audiobook_only">
-            <span className="flex items-center gap-2 font-medium">
-              <Headphones className="size-4 text-muted-foreground" aria-hidden /> Audiobook only
+          <RadioCard value="audiobook_only" className="gap-2 pr-9">
+            <CheckedMark />
+            <span className="grid size-9 place-items-center rounded-lg bg-muted text-muted-foreground transition-colors group-data-[state=checked]:bg-brand group-data-[state=checked]:text-brand-foreground">
+              <Headphones className="size-[18px]" aria-hidden />
             </span>
-            <span className="text-xs text-muted-foreground">M4A audio with chapters and SRT subtitles. No video — much faster.</span>
+            <span className="font-medium">Audiobook only</span>
+            <span className="text-xs leading-relaxed text-muted-foreground">M4A audio with chapters and SRT subtitles. No video — much faster.</span>
           </RadioCard>
         </RadioGroup>
-      </Section>
+      </FormSection>
 
       {/* ── Narration ── */}
-      <Section icon={<Mic />} title="Narration" description="Local text-to-speech — nothing leaves your Mac.">
-        <Field label="Language" htmlFor={ids.lang} className="sm:max-w-[calc(50%-10px)]">
+      <FormSection id="narration" step={step(1)} icon={<Mic />} title="Narration" description="Local text-to-speech — nothing leaves your Mac.">
+        <Field label="Language" htmlFor={ids.lang} className="sm:max-w-md">
           <Select value={value.language} onValueChange={(l) => update((d) => void (d.language = l as ProjectSettings['language']))}>
-            <SelectTrigger id={ids.lang}>
+            <SelectTrigger id={ids.lang} className="h-10">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -359,7 +411,15 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
           </Select>
         </Field>
         <VoiceFields settings={value} config={config} disabled={disabled} update={update} />
-        <Field label={<>Speed <span className="ml-auto font-normal text-muted-foreground tabular">{value.tts.speed.toFixed(2)}×</span></>}>
+        <Field
+          label={
+            <>
+              Speed
+              <span className="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium tabular">{value.tts.speed.toFixed(2)}×</span>
+            </>
+          }
+          className="sm:max-w-md"
+        >
           <Slider
             min={0.5}
             max={2}
@@ -372,28 +432,29 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
           <div className="relative h-4 text-[11px] text-muted-foreground">
             <span className="absolute left-0">0.5× slower</span>
             {/* 1.0× sits at (1 - 0.5) / (2 - 0.5) = 1/3 of the track */}
-            <button type="button" className="absolute left-1/3 -translate-x-1/2 hover:text-foreground" onClick={() => update((d) => void (d.tts.speed = 1))}>
+            <button type="button" className="absolute left-1/3 -translate-x-1/2 rounded hover:text-foreground" onClick={() => update((d) => void (d.tts.speed = 1))}>
               1.0× normal
             </button>
             <span className="absolute right-0">2.0× faster</span>
           </div>
         </Field>
-      </Section>
+      </FormSection>
 
       {/* ── Video ── */}
-      <Section
-        icon={<Palette />}
-        title="Video & highlighting"
-        description={videoOn ? 'How the animated PDF looks.' : 'Not used for audiobook-only output.'}
-        className={cn(!videoOn && 'opacity-60')}
-      >
-        <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
-          <div className="grid content-start gap-5">
+      <FormSection id="look" step={step(2)} icon={<Palette />} title="Video & highlighting" description={videoOn ? 'How the animated PDF looks.' : 'Not used for audiobook-only output.'}>
+        {!videoOn ? (
+          <div className="flex flex-col gap-3 rounded-xl border border-dashed p-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>No video is rendered — only the audiobook and subtitles.</span>
+            <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => update((d) => void (d.outputMode = 'audiobook_video'))}>
+              <Film aria-hidden /> Add the read-along video
+            </Button>
+          </div>
+        ) : (
+          <>
             <Field label="Video format">
               <RadioGroup
                 aria-label="Video format"
                 value={v.aspectRatio}
-                disabled={!videoOn || disabled}
                 onValueChange={(a) =>
                   update((d) => {
                     d.video.aspectRatio = a as AspectRatio;
@@ -403,7 +464,7 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
                 className="grid grid-cols-3 gap-2"
               >
                 {ASPECTS.map((a) => (
-                  <RadioCard key={a.value} value={a.value} className="items-center p-2.5 text-center">
+                  <RadioCard key={a.value} value={a.value} className="items-center gap-1 p-2.5 text-center">
                     <AspectShape ratio={a.value} />
                     <span className="font-medium">{a.label}</span>
                     <span className="text-[11px] leading-tight text-muted-foreground">{a.hint}</span>
@@ -417,30 +478,28 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
               ) : null}
             </Field>
 
-            <Field label="Animation" htmlFor={ids.anim} hint={ANIMATIONS.find((a) => a.value === v.animation)?.hint}>
-              <Select value={v.animation} disabled={!videoOn || disabled} onValueChange={(a) => update((d) => void (d.video.animation = a as AnimationStyle))}>
-                <SelectTrigger id={ids.anim}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ANIMATIONS.map((a) => (
-                    <SelectItem key={a.value} value={a.value}>
-                      {a.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <Field label="Camera" hint={ANIMATIONS.find((a) => a.value === v.animation)?.hint}>
+              <RadioGroup aria-label="Camera animation" value={v.animation} onValueChange={(a) => update((d) => void (d.video.animation = a as AnimationStyle))} className="grid gap-2 sm:grid-cols-3">
+                {ANIMATIONS.map((a) => (
+                  <RadioCard key={a.value} value={a.value} className="flex-row items-center gap-2.5 p-2.5">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground transition-colors group-data-[state=checked]:bg-foreground group-data-[state=checked]:text-background">
+                      <a.icon className="size-3.5" aria-hidden />
+                    </span>
+                    <span className="font-medium">{a.label}</span>
+                  </RadioCard>
+                ))}
+              </RadioGroup>
             </Field>
 
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-6 sm:grid-cols-2">
               <Field label="Highlight">
-                <Segmented value={v.highlightMode} disabled={!videoOn || disabled} onValueChange={(m) => update((d) => void (d.video.highlightMode = m as HighlightMode))} aria-label="Highlight unit">
+                <Segmented value={v.highlightMode} onValueChange={(m) => update((d) => void (d.video.highlightMode = m as HighlightMode))} aria-label="Highlight unit">
                   <SegmentedItem value="sentence">Sentence</SegmentedItem>
                   <SegmentedItem value="paragraph">Paragraph</SegmentedItem>
                 </Segmented>
               </Field>
               <Field label="Style">
-                <Segmented value={v.highlightStyle} disabled={!videoOn || disabled} onValueChange={(s) => update((d) => void (d.video.highlightStyle = s as HighlightStyle))} aria-label="Highlight style">
+                <Segmented value={v.highlightStyle} onValueChange={(s) => update((d) => void (d.video.highlightStyle = s as HighlightStyle))} aria-label="Highlight style">
                   <SegmentedItem value="marker">Marker</SegmentedItem>
                   <SegmentedItem value="underline">Underline</SegmentedItem>
                   <SegmentedItem value="box">Box</SegmentedItem>
@@ -448,8 +507,8 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
               </Field>
             </div>
 
-            <Field label="Highlight color" htmlFor={ids.color}>
-              <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Highlight color">
+            <Field label="Highlight colour" htmlFor={ids.color}>
+              <div className="flex flex-wrap items-center gap-2.5" role="radiogroup" aria-label="Highlight colour">
                 {COLORS.map((c) => {
                   const on = v.highlightColor.toUpperCase() === c.value;
                   return (
@@ -460,63 +519,65 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
                       aria-checked={on}
                       aria-label={c.label}
                       title={c.label}
-                      disabled={!videoOn || disabled}
                       onClick={() => update((d) => void (d.video.highlightColor = c.value))}
                       className={cn(
-                        'size-7 rounded-full border border-black/10 shadow-xs transition-transform outline-none hover:scale-110 focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
-                        on && 'ring-2 ring-foreground ring-offset-2 ring-offset-background',
+                        'grid size-8 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)] transition-transform outline-none hover:scale-110 focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
+                        on && 'ring-2 ring-foreground ring-offset-2 ring-offset-card',
                       )}
                       style={{ background: c.value }}
-                    />
+                    >
+                      {on && <Check className="size-3.5 text-black/70" strokeWidth={3} aria-hidden />}
+                    </button>
                   );
                 })}
                 <label
                   className={cn(
-                    'relative flex h-7 cursor-pointer items-center gap-1.5 rounded-full border px-2 text-xs text-muted-foreground hover:text-foreground',
-                    !COLORS.some((c) => c.value === v.highlightColor.toUpperCase()) && 'ring-2 ring-foreground ring-offset-2 ring-offset-background',
+                    'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground',
+                    !COLORS.some((c) => c.value === v.highlightColor.toUpperCase()) && 'text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-card',
                   )}
                   htmlFor={ids.color}
                 >
-                  <span className="size-4 rounded-full border border-black/10" style={{ background: v.highlightColor }} aria-hidden />
+                  <span className="size-4 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)]" style={{ background: v.highlightColor }} aria-hidden />
                   Custom
                   <input
                     id={ids.color}
                     type="color"
                     className="absolute inset-0 cursor-pointer opacity-0"
                     value={v.highlightColor}
-                    disabled={!videoOn || disabled}
                     onChange={(e) => update((d) => void (d.video.highlightColor = e.target.value.toUpperCase()))}
                   />
                 </label>
               </div>
             </Field>
 
-            <Field label="Background theme">
-              <RadioGroup aria-label="Background theme" value={v.theme} disabled={!videoOn || disabled} onValueChange={(th) => update((d) => void (d.video.theme = th as VideoTheme))} className="grid grid-cols-3 gap-2">
+            <Field label="Background">
+              <RadioGroup aria-label="Background theme" value={v.theme} onValueChange={(th) => update((d) => void (d.video.theme = th as VideoTheme))} className="grid grid-cols-3 gap-2">
                 {THEMES.map((th) => (
-                  <RadioCard key={th.value} value={th.value} className="flex-row items-center gap-2 p-2.5">
-                    <span className="grid size-6 shrink-0 place-items-center rounded-md border border-black/10" style={{ background: th.bg }} aria-hidden>
-                      <span className="h-3.5 w-2.5 rounded-[2px] bg-white shadow-xs" />
+                  <RadioCard key={th.value} value={th.value} className="gap-2 p-2">
+                    <span className="grid h-12 w-full place-items-center rounded-lg shadow-[inset_0_0_0_1px_rgb(0_0_0/0.08)]" style={{ background: th.bg }} aria-hidden>
+                      <span className="grid h-8 w-6 content-start gap-[3px] rounded-[2px] bg-white p-1 shadow-sm">
+                        <span className="h-[2px] w-full rounded-full bg-black/25" />
+                        <span className="h-[2px] w-full rounded-full" style={{ background: v.highlightColor }} />
+                        <span className="h-[2px] w-3/4 rounded-full bg-black/25" />
+                      </span>
                     </span>
-                    <span className="font-medium">{th.label}</span>
+                    <span className="px-0.5 font-medium">{th.label}</span>
                   </RadioCard>
                 ))}
               </RadioGroup>
             </Field>
 
-            <div className="grid gap-4 rounded-lg border p-4">
+            <ToggleList>
               <ToggleRow
                 label="Progress bar"
                 description="Thin bar along the bottom showing how far into the book you are."
                 checked={v.showProgress}
-                disabled={!videoOn || disabled}
                 onCheckedChange={(c) => update((d) => void (d.video.showProgress = c))}
               />
               <ToggleRow
                 label="Chapter title"
                 description="Show the chapter name briefly when a chapter begins."
                 checked={v.showChapterTitle}
-                disabled={!videoOn || disabled}
                 onCheckedChange={(c) => update((d) => void (d.video.showChapterTitle = c))}
               />
               <ToggleRow
@@ -527,20 +588,34 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
                 }
                 description="Adds a switchable subtitle track. subtitles.srt is always exported too."
                 checked={v.embedSubtitles}
-                disabled={!videoOn || disabled}
                 onCheckedChange={(c) => update((d) => void (d.video.embedSubtitles = c))}
               />
-            </div>
-          </div>
-          <div className="lg:sticky lg:top-20 lg:self-start">
-            <LookPreview settings={value} />
-          </div>
-        </div>
-      </Section>
+            </ToggleList>
+          </>
+        )}
+      </FormSection>
 
       {/* ── Text ── */}
-      <Section icon={<ScanText />} title="Text processing" description="Deterministic cleanup always runs first; these options fine-tune it.">
-        <div className="grid gap-4 rounded-lg border p-4">
+      <FormSection id="text" step={step(3)} icon={<ScanText />} title="Text processing" description="Deterministic cleanup always runs first; these options fine-tune it.">
+        <ToggleList>
+          <ToggleRow
+            label="Review chapters before narration"
+            description="Pause after chapter detection so you can untick, rename or merge chapters first."
+            checked={t.reviewChapters}
+            onCheckedChange={(c) => update((d) => void (d.text.reviewChapters = c))}
+          />
+          <ToggleRow
+            label="Skip front matter"
+            description="Start narrating at the first chapter — skips the copyright page, table of contents, etc."
+            checked={t.skipFrontMatter}
+            onCheckedChange={(c) => update((d) => void (d.text.skipFrontMatter = c))}
+          />
+          <ToggleRow
+            label="Skip back matter"
+            description="Leave out a trailing licence, index, “about the author” or “also by” section."
+            checked={t.skipBackMatter}
+            onCheckedChange={(c) => update((d) => void (d.text.skipBackMatter = c))}
+          />
           <ToggleRow
             label={
               <>
@@ -556,24 +631,6 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
             onCheckedChange={(c) => update((d) => void (d.text.useLlm = c))}
           />
           <ToggleRow
-            label="Skip front matter"
-            description="Start narrating at the first chapter — skips the copyright page, table of contents, etc."
-            checked={t.skipFrontMatter}
-            onCheckedChange={(c) => update((d) => void (d.text.skipFrontMatter = c))}
-          />
-          <ToggleRow
-            label="Skip back matter"
-            description="Leave out a trailing licence, index, “about the author” or “also by” section."
-            checked={t.skipBackMatter}
-            onCheckedChange={(c) => update((d) => void (d.text.skipBackMatter = c))}
-          />
-          <ToggleRow
-            label="Review chapters before narration"
-            description="Pause after chapter detection so you can untick, rename or merge chapters first."
-            checked={t.reviewChapters}
-            onCheckedChange={(c) => update((d) => void (d.text.reviewChapters = c))}
-          />
-          <ToggleRow
             label="Only narrate some chapters"
             description="Handy for a quick test run before processing the whole book."
             checked={!!range}
@@ -582,56 +639,57 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
                 d.text.chapterRange = c ? { from: 1, to: Math.max(1, Math.min(2, chapterCount ?? 2)) } : undefined;
               })
             }
-          />
-          {range && (
-            <div className="grid gap-2 sm:pl-0">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Label htmlFor={ids.from} className="font-normal text-muted-foreground">
-                  Chapters
-                </Label>
-                <Input
-                  id={ids.from}
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={chapterCount}
-                  className="h-8 w-20"
-                  value={Number.isFinite(range.from) ? range.from : ''}
-                  aria-invalid={!!rangeError}
-                  onChange={(e) => update((d) => void (d.text.chapterRange = { ...range, from: Math.trunc(Number(e.target.value)) }))}
-                />
-                <Label htmlFor={ids.to} className="font-normal text-muted-foreground">
-                  to
-                </Label>
-                <Input
-                  id={ids.to}
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={chapterCount}
-                  className="h-8 w-20"
-                  value={Number.isFinite(range.to) ? range.to : ''}
-                  aria-invalid={!!rangeError}
-                  onChange={(e) => update((d) => void (d.text.chapterRange = { ...range, to: Math.trunc(Number(e.target.value)) }))}
-                />
-                {chapterCount ? <span className="text-xs text-muted-foreground">of {chapterCount} detected</span> : null}
+          >
+            {range && (
+              <div className="grid gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Label htmlFor={ids.from} className="font-normal text-muted-foreground">
+                    Chapters
+                  </Label>
+                  <Input
+                    id={ids.from}
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={chapterCount}
+                    className="h-8 w-20"
+                    value={Number.isFinite(range.from) ? range.from : ''}
+                    aria-invalid={!!rangeError}
+                    onChange={(e) => update((d) => void (d.text.chapterRange = { ...range, from: Math.trunc(Number(e.target.value)) }))}
+                  />
+                  <Label htmlFor={ids.to} className="font-normal text-muted-foreground">
+                    to
+                  </Label>
+                  <Input
+                    id={ids.to}
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={chapterCount}
+                    className="h-8 w-20"
+                    value={Number.isFinite(range.to) ? range.to : ''}
+                    aria-invalid={!!rangeError}
+                    onChange={(e) => update((d) => void (d.text.chapterRange = { ...range, to: Math.trunc(Number(e.target.value)) }))}
+                  />
+                  {chapterCount ? <span className="text-xs text-muted-foreground">of {chapterCount} detected</span> : null}
+                </div>
+                {rangeError ? (
+                  <p className="text-xs text-destructive">{rangeError}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Numbered as in the chapter list; front matter before the first chapter counts as one when present.</p>
+                )}
               </div>
-              {rangeError ? (
-                <p className="text-xs text-destructive">{rangeError}</p>
-              ) : (
-                <p className="text-xs text-muted-foreground">Numbered as in the chapter list; front matter before the first chapter counts as one when present.</p>
-              )}
-            </div>
-          )}
-        </div>
+            )}
+          </ToggleRow>
+        </ToggleList>
         <Field
           label="OCR for scanned pages"
           htmlFor={ids.ocr}
-          className="sm:max-w-[calc(50%-10px)]"
+          className="sm:max-w-md"
           hint={document?.likelyScanned ? 'This PDF looks scanned, so OCR is needed to read it.' : 'Text PDFs are read directly — OCR is only a fallback.'}
         >
           <Select value={t.ocr} onValueChange={(o) => update((d) => void (d.text.ocr = o as OcrMode))}>
-            <SelectTrigger id={ids.ocr}>
+            <SelectTrigger id={ids.ocr} className="h-10">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -644,11 +702,11 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
           </Select>
         </Field>
         {document?.likelyScanned && t.ocr === 'off' && (
-          <p className="flex items-center gap-1.5 text-xs text-destructive">
+          <p className="-mt-3 flex items-center gap-1.5 text-xs text-destructive">
             <Info className="size-3.5" aria-hidden /> A scanned PDF cannot be processed with OCR turned off.
           </p>
         )}
-      </Section>
+      </FormSection>
     </fieldset>
   );
 }

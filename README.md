@@ -86,7 +86,7 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   interrupted 10-hour book resumes at the chapter where it stopped. Changing the video theme re-renders
   video only, and changing the voice never redoes PDF or LLM work.
 - **Power modes that keep a laptop cool.** Silent (efficiency cores only), Cool & quiet (≈ 2 cores),
-  Balanced (≈ 4 cores, the default) and Fast. Switch live from the dashboard, pause instantly, and it
+  Balanced (≈ 4 cores, the default) and Fast. Switch live from the web UI, pause instantly, and it
   drops to Cool & quiet automatically on battery. See [Power modes](#power-modes-heat-fan-noise-and-battery).
 - **Resource-aware on 16 GB.** You set the number of TTS, render, LLM and project jobs that may run
   at once. Python model processes are shut down between stages to give memory back. Audio and video
@@ -507,27 +507,42 @@ you set yourself are overridden for those processes.
 Run `pnpm dev` (or `pnpm dev:web` while the API and the worker are running) and open
 <http://localhost:3000>.
 
-- **Dashboard** (`/`): every project with its status and progress, plus a banner when a required
-  dependency is missing (from `GET /system/health`).
-- **New audiobook** (`/new`): drag and drop a PDF. The page shows the file name, size, page
+The app has a sidebar (a drawer on small screens) with **New audiobook**, the **Library**, the
+**System** page, the most recent books with their live status, and the current power mode with a
+pause / resume button while something is processing. Press <kbd>N</kbd> anywhere to start a new
+audiobook and <kbd>/</kbd> in the library to search.
+
+- **Library** (`/`): every book as a cover (the PDF's first page) with its status, progress and
+  narration length, or as a list. A *Now processing* strip shows running books; filter by
+  *In progress*, *Needs attention* (failed, or waiting for a chapter review) and *Completed*, or
+  search by title and file name. A banner appears when a required dependency is missing (from
+  `GET /system/health`).
+- **New audiobook** (`/new`): drag and drop a PDF. The page shows its cover, title, author, page
   count, estimated word count and narration length, and warns about scanned PDFs. The settings
   are pre-filled with the server defaults: output (video or audio only), voice engine, voice,
-  language and speed, video format (16:9, 9:16, 1:1), animation, highlight unit, style and colour,
-  background theme, progress bar, chapter title, embedded subtitles, and the text options (local
-  AI, skip front matter, skip back matter, review chapters before narration (on by default in the
-  UI), chapter range, OCR).
+  language and speed, video format (16:9, 9:16, 1:1), camera animation, highlight unit, style and
+  colour, background theme, progress bar, chapter title, embedded subtitles, and the text options
+  (review chapters before narration (on by default in the UI), skip front matter, skip back matter,
+  local AI, chapter range, OCR). A side panel shows a live preview of one video frame and the
+  **Start processing** button.
 - **Chapter review** (on the project page while the status is `AWAITING_REVIEW`, or via
   **Review chapters** afterwards): every detected chapter with its pages, word count and first
   words; tick or untick it, fix its title, or merge it into the previous chapter. The header shows
   the kept word count and an estimate of the narration length (≈ 175 words/min at speed 1.0).
   **Narrate N chapters** saves the list and starts processing; later changes re-narrate only the
   chapters they affect.
-- **Project page** (`/projects/<id>`): live progress per stage and per chapter; plain-language
-  errors with the matching retry action; Resume, Retry, Cancel, Restart, Clean project cache and
-  Delete project; the settings, which list the stages a change will redo before you save; a
-  **preview** with a read-along player (the PDF page with the spoken sentence highlighted,
-  synced to the audio) that works as soon as the narration is ready, then the final video; the
-  detected chapters and the downloads.
+- **Project page** (`/projects/<id>`): the book's cover, title and author with the action for its
+  state (Start, Cancel, Retry, Resume, or Download when finished) and a menu with Review chapters,
+  Restart, Clean project cache and Delete project; plain-language errors with the matching retry
+  action. Three tabs (`?tab=` in the address keeps the one you are on):
+  - **Overview**: live progress per stage and per chapter, the downloads, the power mode while
+    processing, and the detected chapters.
+  - **Read-along**: the PDF page with the spoken sentence highlighted, synced to the audio — it
+    works as soon as the narration is ready — and then the final video. `?t=1:23` opens it at that
+    moment.
+  - **Settings**: the same options as for a new book, with a preview and the list of stages a
+    change will redo (and reuse) before you save and re-run.
+- **System** (`/system`): every health check with its fix command, and the power mode.
 
 The web UI offers the three aspect-ratio presets and does not expose the frame rate (30 fps by
 default). A custom resolution or frame rate can be set through the API
@@ -928,7 +943,7 @@ OpenCV single-threaded (same 190 fps, ⅓ less CPU).
 Measured end-to-end with the CLI on a short book (4:09 of narration, on battery): Balanced 67 s at
 2.5 cores on average, Cool & quiet 84 s at 1.7 cores, Silent 9 min 18 s.
 
-- **Change it live.** Dashboard or project page → **Power**. Pause and Silent take effect at once:
+- **Change it live.** Sidebar, System page or project page → **Power**. Pause and Silent take effect at once:
   processes are frozen with `SIGSTOP` / moved to the efficiency cores with `taskpolicy`. A different
   thread or process count applies from the next chapter. The time estimates next to each mode are for
   the open book.

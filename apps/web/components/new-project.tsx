@@ -1,22 +1,24 @@
 'use client';
 
 import { DEFAULT_SETTINGS, type ProjectDetail, type ProjectSettings } from '@app/types';
-import { ArrowLeft, BookOpen, CircleCheck, FileText, ListTree, LoaderCircle, Play, ScanText, ShieldCheck, TriangleAlert, X } from 'lucide-react';
-import Link from 'next/link';
+import { CircleCheck, Headphones, ListTree, LoaderCircle, Play, ScanText, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
+import { BookCover } from '@/components/book-cover';
 import { HealthBanner } from '@/components/health-banner';
-import { SettingsForm, validateSettings } from '@/components/settings-form';
+import { PageHeader } from '@/components/page-header';
+import { FormSection, LookPreview, SettingsForm, validateSettings } from '@/components/settings-form';
 import { isPdfFile, UploadDropzone } from '@/components/upload-dropzone';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useApi } from '@/hooks/use-api';
 import { ApiError, api, toApiError, type UploadHandle, uploadProject } from '@/lib/api';
 import { estimateNarrationSec, formatBytes, formatDuration, formatNumber } from '@/lib/format';
 import { cloneSettings, diffSettings, isEmptyPatch, settingsForUpload } from '@/lib/settings';
+import { cn } from '@/lib/utils';
+import { ENGINE_LABELS } from '@/lib/voices';
 
 type Upload =
   | { state: 'idle' }
@@ -24,14 +26,11 @@ type Upload =
   | { state: 'done'; file: File; project: ProjectDetail }
   | { state: 'error'; file: File; error: ApiError };
 
-function Stat({ label, value, icon }: { label: string; value: ReactNode; icon: ReactNode }) {
+function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="grid gap-1 rounded-lg border bg-muted/30 px-3 py-2.5">
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground [&_svg]:size-3.5">
-        {icon}
-        {label}
-      </span>
-      <span className="text-lg font-semibold tracking-tight tabular">{value}</span>
+    <div className="grid gap-0.5 rounded-xl bg-muted/60 px-3 py-2.5">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className="text-[17px] leading-tight font-semibold tracking-tight tabular">{value}</span>
     </div>
   );
 }
@@ -41,48 +40,42 @@ function FileCard({ upload, speed, onReset }: { upload: Exclude<Upload, { state:
   const doc = upload.state === 'done' ? upload.project.document : undefined;
   const inspecting = upload.state === 'uploading' && upload.progress >= 1;
   return (
-    <div className="grid gap-4">
-      <div className="flex items-start gap-3">
-        <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
-          <FileText className="size-5" aria-hidden />
-        </span>
-        <div className="grid min-w-0 flex-1 gap-0.5">
-          <p className="truncate font-medium" title={f.name}>
-            {f.name}
+    <div className="grid gap-5">
+      <div className="flex items-start gap-4">
+        <BookCover projectId={upload.state === 'done' ? upload.project.id : undefined} title={doc?.title || f.name.replace(/\.pdf$/i, '')} className="w-16" />
+        <div className="grid min-w-0 flex-1 gap-1 pt-0.5">
+          <p className="truncate font-serif text-lg leading-snug font-medium" title={doc?.title || f.name}>
+            {doc?.title || f.name}
           </p>
-          <p className="text-sm text-muted-foreground tabular">
+          <p className="truncate text-sm text-muted-foreground tabular">
+            {doc?.author ? `${doc.author} · ` : ''}
+            {doc?.title ? `${f.name} · ` : ''}
             {formatBytes(f.size)}
-            {doc?.title && (
-              <>
-                {' · '}“{doc.title}”{doc.author ? ` by ${doc.author}` : ''}
-              </>
-            )}
           </p>
+          {upload.state === 'uploading' && (
+            <div className="mt-2 grid gap-1.5">
+              <Progress value={upload.progress * 100} live={inspecting} className="h-1.5" />
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
+                <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
+                {inspecting ? 'Inspecting PDF — counting pages and words…' : `Uploading… ${Math.round(upload.progress * 100)}%`}
+              </p>
+            </div>
+          )}
         </div>
         <Button variant="ghost" size="sm" onClick={onReset} disabled={upload.state === 'uploading'} className="shrink-0 text-muted-foreground">
-          <X aria-hidden /> <span className="hidden sm:inline">Choose another file</span>
+          <X aria-hidden /> <span className="hidden sm:inline">Replace</span>
         </Button>
       </div>
-
-      {upload.state === 'uploading' && (
-        <div className="grid gap-1.5">
-          <Progress value={upload.progress * 100} />
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
-            {inspecting ? 'Inspecting PDF — counting pages and words…' : `Uploading… ${Math.round(upload.progress * 100)}%`}
-          </p>
-        </div>
-      )}
 
       {upload.state === 'error' && <ApiErrorAlert error={upload.error} title="Upload failed" onRetry={onReset} retryLabel="Choose another file" />}
 
       {doc && (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Stat label="Pages" value={formatNumber(doc.pageCount)} icon={<BookOpen aria-hidden />} />
-            <Stat label="Estimated words" value={`~${formatNumber(Math.round(doc.estimatedWords / 100) * 100 || doc.estimatedWords)}`} icon={<FileText aria-hidden />} />
-            <Stat label="Narration (est.)" value={`~${formatDuration(estimateNarrationSec(doc.estimatedWords, speed))}`} icon={<Play aria-hidden />} />
-            <Stat label="File size" value={formatBytes(doc.fileSize)} icon={<FileText aria-hidden />} />
+            <Stat label="Pages" value={formatNumber(doc.pageCount)} />
+            <Stat label="Words (est.)" value={`~${formatNumber(Math.round(doc.estimatedWords / 100) * 100 || doc.estimatedWords)}`} />
+            <Stat label="Narration (est.)" value={`~${formatDuration(estimateNarrationSec(doc.estimatedWords, speed))}`} />
+            <Stat label="File size" value={formatBytes(doc.fileSize)} />
           </div>
           <div className="flex flex-wrap gap-2">
             {doc.likelyScanned ? (
@@ -111,6 +104,15 @@ function FileCard({ upload, speed, onReset }: { upload: Exclude<Upload, { state:
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function SummaryRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-2 text-sm">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-right font-medium">{children}</dd>
     </div>
   );
 }
@@ -196,46 +198,51 @@ export function NewProject() {
     }
   };
 
+  const hint =
+    upload.state === 'idle'
+      ? 'Upload a PDF to continue.'
+      : upload.state === 'uploading'
+        ? 'Uploading… you can keep configuring meanwhile.'
+        : upload.state === 'error'
+          ? 'Fix the upload problem to continue.'
+          : invalid
+            ? invalid
+            : settings.text.reviewChapters
+              ? 'Ready. You will check the chapter list before narration starts.'
+              : 'Ready. Later changes only recompute the stages they affect.';
+
+  const startButton = (className?: string) => (
+    <Button size="lg" variant="brand" onClick={() => void start()} disabled={!canStart} className={className}>
+      {starting ? <LoaderCircle className="animate-spin" aria-hidden /> : <Play className="fill-current" aria-hidden />}
+      {starting ? 'Starting…' : 'Start processing'}
+    </Button>
+  );
+
+  const doc = upload.state === 'done' ? upload.project.document : undefined;
+  const videoOn = settings.outputMode === 'audiobook_video';
+
   return (
-    <div className="grid gap-6 pb-4">
-      <div className="grid gap-3">
-        <Link href="/" className="flex w-fit items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-4" aria-hidden /> Projects
-        </Link>
-        <div className="grid gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">New audiobook</h1>
-          <p className="text-sm text-muted-foreground">Upload a PDF, choose a voice and a look, then start. Processing runs in the background — you can close this tab.</p>
-        </div>
-      </div>
+    <div className="grid gap-8">
+      <PageHeader
+        back={{ href: '/', label: 'Library' }}
+        title="New audiobook"
+        description="Upload a PDF, choose a voice and a look, then start. Processing runs in the background — you can close this tab."
+      />
 
-      <HealthBanner hideWhenHealthy />
+      <HealthBanner />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <span className="grid size-6 place-items-center rounded-full bg-primary text-xs text-primary-foreground">1</span> Upload
-          </CardTitle>
-          <CardDescription>Your PDF stays on this Mac. The same file is only stored once.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          {upload.state === 'idle' ? <UploadDropzone onFile={onFile} maxMb={maxMb} /> : <FileCard upload={upload} speed={settings.tts.speed} onReset={reset} />}
-          {localError && (
-            <p className="flex items-center gap-1.5 text-sm text-destructive" role="alert">
-              <TriangleAlert className="size-4 shrink-0" aria-hidden /> {localError}
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-8">
+        <div className="grid min-w-0 gap-6">
+          <FormSection step={1} title="Upload your PDF" description="Your PDF stays on this Mac. The same file is only stored once.">
+            {upload.state === 'idle' ? <UploadDropzone onFile={onFile} maxMb={maxMb} /> : <FileCard upload={upload} speed={settings.tts.speed} onReset={reset} />}
+            {localError && (
+              <p className="-mt-2 flex items-center gap-1.5 text-sm text-destructive" role="alert">
+                <TriangleAlert className="size-4 shrink-0" aria-hidden /> {localError}
+              </p>
+            )}
+          </FormSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <span className="grid size-6 place-items-center rounded-full bg-primary text-xs text-primary-foreground">2</span> Configure
-          </CardTitle>
-          <CardDescription>Sensible defaults are pre-selected. Everything can be changed later.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {config.error && !config.data && <ApiErrorAlert error={config.error} className="mb-6" onRetry={() => void config.refresh()} />}
+          {config.error && !config.data && <ApiErrorAlert error={config.error} onRetry={() => void config.refresh()} />}
           <SettingsForm
             value={settings}
             onChange={(s) => {
@@ -244,30 +251,51 @@ export function NewProject() {
             }}
             config={config.data}
             disabled={starting}
-            document={upload.state === 'done' ? upload.project.document : undefined}
+            document={doc}
+            firstStep={2}
           />
-        </CardContent>
-      </Card>
 
-      {startError && <ApiErrorAlert error={startError} title="Could not start processing" />}
+          {startError && <ApiErrorAlert error={startError} title="Could not start processing" />}
+        </div>
 
-      <div className="sticky bottom-3 z-30">
-        <div className="flex flex-col gap-3 rounded-xl border bg-card/90 p-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/75 sm:flex-row sm:items-center sm:justify-between sm:pl-5">
-          <p className="text-sm text-muted-foreground">
-            {upload.state === 'idle'
-              ? 'Upload a PDF to continue.'
-              : upload.state === 'uploading'
-                ? 'Uploading… you can keep configuring meanwhile.'
-                : upload.state === 'error'
-                  ? 'Fix the upload problem to continue.'
-                  : invalid
-                    ? invalid
-                    : 'Ready. Later changes only recompute the stages they affect.'}
-          </p>
-          <Button size="lg" onClick={() => void start()} disabled={!canStart} className="shrink-0">
-            {starting ? <LoaderCircle className="animate-spin" aria-hidden /> : <Play aria-hidden />}
-            {starting ? 'Starting…' : 'Start'}
-          </Button>
+        {/* Summary rail */}
+        <aside className="grid gap-4 lg:sticky lg:top-8" aria-label="Summary">
+          <div className="grid gap-5 rounded-2xl border bg-card p-5 shadow-card">
+            <div className="grid gap-3">
+              <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">Preview</p>
+              {videoOn ? (
+                <LookPreview settings={settings} />
+              ) : (
+                <div className="grid aspect-video place-items-center rounded-xl bg-muted/70 text-muted-foreground">
+                  <span className="grid justify-items-center gap-2 text-sm">
+                    <Headphones className="size-6" aria-hidden /> Audio only — M4A + SRT
+                  </span>
+                </div>
+              )}
+            </div>
+            <dl className="divide-y border-y">
+              <SummaryRow label="Book">{doc?.title || (upload.state !== 'idle' ? upload.file.name : <span className="font-normal text-muted-foreground">No file yet</span>)}</SummaryRow>
+              <SummaryRow label="Narration">
+                {doc ? `~${formatDuration(estimateNarrationSec(doc.estimatedWords, settings.tts.speed))}` : <span className="font-normal text-muted-foreground">—</span>}
+              </SummaryRow>
+              <SummaryRow label="Voice">
+                {ENGINE_LABELS[settings.tts.engine]?.name ?? settings.tts.engine} · {settings.tts.speed.toFixed(2)}×
+              </SummaryRow>
+              <SummaryRow label="Output">{videoOn ? `Video ${settings.video.aspectRatio} + audio` : 'Audio only'}</SummaryRow>
+            </dl>
+            <div className="hidden gap-2.5 lg:grid">
+              {startButton('w-full')}
+              <p className={cn('text-center text-xs', invalid && upload.state === 'done' ? 'text-destructive' : 'text-muted-foreground')}>{hint}</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      {/* Start bar on small screens */}
+      <div className="sticky bottom-3 z-30 lg:hidden">
+        <div className="flex items-center gap-3 rounded-2xl border bg-card/90 p-2.5 pl-4 shadow-float backdrop-blur-md supports-[backdrop-filter]:bg-card/75">
+          <p className={cn('min-w-0 flex-1 text-xs sm:text-sm', invalid && upload.state === 'done' ? 'text-destructive' : 'text-muted-foreground')}>{hint}</p>
+          {startButton('shrink-0')}
         </div>
       </div>
     </div>

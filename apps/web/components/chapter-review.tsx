@@ -53,12 +53,13 @@ export function ChapterReview({ project, onStarted, onClose }: { project: Projec
   }
 
   return (
-    <Card className="gap-4 border-warning/40">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ListChecks className="size-4 text-warning" aria-hidden /> Review chapters
-        </CardTitle>
-        <CardDescription>
+    <Card className="gap-5 border-warning/50 shadow-float ring-4 ring-warning/10">
+      <CardHeader className="grid-cols-[auto_1fr] gap-x-3.5">
+        <span className="row-span-2 grid size-9 place-items-center rounded-xl bg-warning/20 text-warning-foreground dark:text-warning">
+          <ListChecks className="size-[18px]" aria-hidden />
+        </span>
+        <CardTitle className="text-base">Review chapters</CardTitle>
+        <CardDescription className="max-w-3xl">
           Check the detected chapters before narration starts. Untick what should not be read, fix titles, or merge a chapter into the one before it. Only
           the chapters you change are narrated again later.
         </CardDescription>
@@ -75,7 +76,7 @@ export function ChapterReview({ project, onStarted, onClose }: { project: Projec
           )
         ) : (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/60 px-3.5 py-2 text-sm">
               <p className="text-muted-foreground tabular">
                 <span className="font-medium text-foreground">
                   {kept.length} of {rows.length}
@@ -83,20 +84,20 @@ export function ChapterReview({ project, onStarted, onClose }: { project: Projec
                 chapters · ~{formatNumber(words)} words · ≈ {formatDuration(estimateNarrationSec(words, project.settings.tts.speed))} of narration
               </p>
               <div className="flex gap-1">
-                <Button size="sm" variant="ghost" onClick={() => setAll(() => true)}>
+                <Button size="xs" variant="ghost" onClick={() => setAll(() => true)}>
                   Select all
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setAll((c) => !c.matter)}>
+                <Button size="xs" variant="ghost" onClick={() => setAll((c) => !c.matter)}>
                   Chapters only
                 </Button>
               </div>
             </div>
-            <ol className="max-h-[32rem] divide-y overflow-y-auto rounded-lg border">
+            <ol className="max-h-[32rem] divide-y overflow-y-auto rounded-xl border scrollbar-thin">
               {rows.map((r) => {
                 const c = byIndex.get(r.index)!;
                 const mergeable = r.include && firstKept !== undefined && r.index !== firstKept;
                 return (
-                  <li key={r.index} className={`grid gap-1.5 px-3 py-2.5 sm:px-4 ${r.include ? '' : 'bg-muted/40'}`}>
+                  <li key={r.index} className={`grid gap-1.5 px-3 py-3 transition-colors sm:px-4 ${r.include ? '' : 'bg-muted/50 [&_input]:text-muted-foreground'}`}>
                     <div className="flex items-center gap-2.5">
                       <Checkbox
                         id={`ch-${r.index}`}
@@ -110,7 +111,7 @@ export function ChapterReview({ project, onStarted, onClose }: { project: Projec
                         onChange={(e) => set(r.index, { title: e.target.value })}
                         disabled={!r.include}
                         aria-label={`Title of chapter ${r.index + 1}`}
-                        className="h-8 min-w-0 flex-1"
+                        className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-2 font-medium shadow-none hover:border-input focus-visible:border-ring dark:bg-transparent"
                         maxLength={200}
                       />
                       {c.matter && (
@@ -142,7 +143,7 @@ export function ChapterReview({ project, onStarted, onClose }: { project: Projec
               })}
             </ol>
             {error && <ApiErrorAlert error={error} title="Could not start narration" />}
-            <div className="flex flex-wrap justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {onClose && (
                 <Button variant="ghost" onClick={onClose} disabled={busy}>
                   Cancel

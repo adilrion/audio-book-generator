@@ -2,27 +2,29 @@
 @import 'tw-animate-css';
 
 /*
- * Design tokens (shadcn/ui convention). Light by default, dark follows the OS
- * via prefers-color-scheme — Tailwind v4's `dark:` variant uses the same media query.
+ * Design tokens (shadcn/ui convention) — "paper & highlighter": warm paper neutrals, ink text and
+ * the amber read-along marker as the one accent. Light by default, dark follows the OS via
+ * prefers-color-scheme (Tailwind v4's `dark:` variant uses the same media query).
  */
 :root {
   color-scheme: light dark;
-  --radius: 0.625rem;
+  --radius: 0.75rem;
 
-  --background: oklch(0.985 0.002 90);
-  --foreground: oklch(0.2 0.006 285);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.006 285);
+  --background: oklch(0.984 0.004 84);
+  --foreground: oklch(0.215 0.012 62);
+  --sidebar: oklch(0.965 0.006 84);
+  --card: oklch(0.998 0.0015 84);
+  --card-foreground: oklch(0.215 0.012 62);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.006 285);
-  --primary: oklch(0.24 0.006 285);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.955 0.003 286);
-  --secondary-foreground: oklch(0.24 0.006 285);
-  --muted: oklch(0.955 0.003 286);
-  --muted-foreground: oklch(0.52 0.014 286);
-  --accent: oklch(0.955 0.003 286);
-  --accent-foreground: oklch(0.24 0.006 285);
+  --popover-foreground: oklch(0.215 0.012 62);
+  --primary: oklch(0.235 0.012 62);
+  --primary-foreground: oklch(0.985 0.004 84);
+  --secondary: oklch(0.948 0.007 84);
+  --secondary-foreground: oklch(0.235 0.012 62);
+  --muted: oklch(0.952 0.006 84);
+  --muted-foreground: oklch(0.5 0.016 66);
+  --accent: oklch(0.942 0.008 84);
+  --accent-foreground: oklch(0.235 0.012 62);
   /* success / info / destructive are dark enough for small text on white and on their 14% tints (WCAG AA 4.5:1) */
   --destructive: oklch(0.532 0.215 27);
   --destructive-foreground: oklch(0.985 0 0);
@@ -31,30 +33,37 @@
   --warning: oklch(0.68 0.15 70);
   --warning-foreground: oklch(0.25 0.05 70);
   --info: oklch(0.52 0.15 255);
-  --border: oklch(0.915 0.004 286);
-  --input: oklch(0.9 0.004 286);
-  --ring: oklch(0.65 0.14 80);
+  --border: oklch(0.905 0.008 80);
+  --input: oklch(0.88 0.009 80);
+  --ring: oklch(0.72 0.14 80);
   /* read-along accent (matches the default highlight marker) */
-  --brand: oklch(0.86 0.15 88);
-  --brand-foreground: oklch(0.28 0.06 70);
+  --brand: oklch(0.86 0.155 86);
+  --brand-foreground: oklch(0.27 0.06 66);
+  /* amber that is readable as text on paper */
+  --brand-ink: oklch(0.52 0.12 68);
+  /* translucent marker behind text (selection, <mark>, .marker) */
+  --marker: oklch(0.88 0.16 90 / 0.75);
+  /* the "desk" the read-along page lies on */
+  --stage: oklch(0.935 0.009 80);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: oklch(0.155 0.004 285);
-    --foreground: oklch(0.96 0.002 286);
-    --card: oklch(0.195 0.005 285);
-    --card-foreground: oklch(0.96 0.002 286);
-    --popover: oklch(0.21 0.006 285);
-    --popover-foreground: oklch(0.96 0.002 286);
-    --primary: oklch(0.94 0.003 286);
-    --primary-foreground: oklch(0.2 0.006 285);
-    --secondary: oklch(0.26 0.006 286);
-    --secondary-foreground: oklch(0.96 0.002 286);
-    --muted: oklch(0.25 0.006 286);
-    --muted-foreground: oklch(0.7 0.012 286);
-    --accent: oklch(0.27 0.006 286);
-    --accent-foreground: oklch(0.96 0.002 286);
+    --background: oklch(0.158 0.006 62);
+    --foreground: oklch(0.955 0.006 84);
+    --sidebar: oklch(0.14 0.006 62);
+    --card: oklch(0.19 0.007 62);
+    --card-foreground: oklch(0.955 0.006 84);
+    --popover: oklch(0.21 0.008 62);
+    --popover-foreground: oklch(0.955 0.006 84);
+    --primary: oklch(0.955 0.006 84);
+    --primary-foreground: oklch(0.2 0.01 62);
+    --secondary: oklch(0.25 0.008 62);
+    --secondary-foreground: oklch(0.955 0.006 84);
+    --muted: oklch(0.235 0.008 62);
+    --muted-foreground: oklch(0.72 0.014 78);
+    --accent: oklch(0.255 0.009 62);
+    --accent-foreground: oklch(0.955 0.006 84);
     --destructive: oklch(0.66 0.19 25);
     --destructive-foreground: oklch(0.985 0 0);
     --success: oklch(0.7 0.15 155);
@@ -62,20 +71,25 @@
     --warning: oklch(0.8 0.14 80);
     --warning-foreground: oklch(0.22 0.04 70);
     --info: oklch(0.7 0.13 255);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 14%);
-    --ring: oklch(0.75 0.13 85);
-    --brand: oklch(0.84 0.15 88);
-    --brand-foreground: oklch(0.24 0.05 70);
+    --border: oklch(1 0 0 / 8.5%);
+    --input: oklch(1 0 0 / 13%);
+    --ring: oklch(0.78 0.13 85);
+    --brand: oklch(0.84 0.15 86);
+    --brand-foreground: oklch(0.24 0.05 66);
+    --brand-ink: oklch(0.84 0.14 86);
+    --marker: oklch(0.84 0.15 86 / 0.32);
+    --stage: oklch(0.125 0.005 62);
   }
 }
 
 @theme inline {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Newsreader Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, ui-serif, serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-sidebar: var(--sidebar);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -100,11 +114,20 @@
   --color-ring: var(--ring);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
+  --color-brand-ink: var(--brand-ink);
+  --color-marker: var(--marker);
+  --color-stage: var(--stage);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: calc(var(--radius) - 2px);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) + 4px);
+
+  --shadow-card: 0 1px 2px oklch(0.3 0.02 60 / 0.05), 0 0 0 0 transparent;
+  --shadow-float: 0 1px 2px oklch(0.3 0.02 60 / 0.06), 0 12px 32px -12px oklch(0.3 0.02 60 / 0.22);
+  --shadow-book: 0 1px 1px oklch(0.2 0.02 60 / 0.12), 0 6px 14px -6px oklch(0.2 0.02 60 / 0.35);
+  --shadow-book-lift: 0 2px 4px oklch(0.2 0.02 60 / 0.12), 0 18px 32px -12px oklch(0.2 0.02 60 / 0.45);
 }
 
 @layer base {
@@ -113,19 +136,51 @@
   }
   html {
     -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
   }
   body {
-    @apply bg-background text-foreground antialiased;
-    font-feature-settings: 'cv11', 'ss01';
+    @apply bg-background font-sans text-foreground antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--marker);
+  }
+  /*
+   * A grid without explicit columns gets one implicit `auto` column, which grows to its widest
+   * child's min-content — a nowrap command or a long file name would push the page wider than a
+   * phone. minmax(0, 1fr) keeps it at the container's width; any grid-cols-* utility still wins
+   * (utilities are a later cascade layer).
+   */
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   button:not(:disabled),
   [role='button']:not([aria-disabled='true']) {
     cursor: pointer;
   }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
 }
 
 @utility tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* Highlighter stroke behind inline text — the read-along marker as a UI motif. */
+@utility marker {
+  background-image: linear-gradient(transparent 52%, var(--marker) 52%, var(--marker) 90%, transparent 90%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  padding-inline: 0.06em;
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
 }
 
 /* Page flip in the read-along preview */
@@ -144,8 +199,57 @@
   animation: page-in 280ms ease-out both;
 }
 
+/* Gentle entrance for page sections */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-rise {
+  animation: rise 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* Equaliser bars shown while narration is being generated */
+@keyframes eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@utility animate-eq {
+  animation: eq 1s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+/* Indeterminate sheen over a progress bar that is still moving */
+@keyframes sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@utility animate-sheen {
+  animation: sheen 1.8s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-page-in {
+  .animate-page-in,
+  .animate-rise,
+  .animate-eq,
+  .animate-sheen {
     animation: none;
   }
 }

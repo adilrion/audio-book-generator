@@ -54,19 +54,24 @@ export function UploadDropzone({ onFile, maxMb, disabled, className }: { onFile:
       }}
       onDrop={onDrop}
       className={cn(
-        'group flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-12 text-center transition-colors outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40',
-        dragging ? 'border-brand bg-brand/10' : 'border-input hover:border-foreground/30 hover:bg-muted/40',
+        'group relative flex flex-col items-center justify-center gap-4 overflow-hidden rounded-2xl border-2 border-dashed px-6 py-12 text-center transition-[border-color,background-color] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 sm:py-14',
+        dragging ? 'border-brand bg-brand/10' : 'border-foreground/15 bg-muted/30 hover:border-foreground/30 hover:bg-muted/60',
         disabled && 'pointer-events-none opacity-60',
         className,
       )}
     >
-      <span className={cn('grid size-12 place-items-center rounded-xl bg-muted text-muted-foreground transition-colors', dragging && 'bg-brand text-brand-foreground')}>
+      <span
+        className={cn(
+          'grid size-14 place-items-center rounded-2xl bg-card text-muted-foreground shadow-book transition-[transform,background-color,color] duration-300 group-hover:-translate-y-0.5',
+          dragging && '-translate-y-1 scale-105 bg-brand text-brand-foreground',
+        )}
+      >
         <FileUp className="size-6" aria-hidden />
       </span>
       <div className="grid gap-1">
-        <p className="font-medium">{dragging ? 'Drop the PDF to upload' : 'Drag & drop a PDF book here'}</p>
+        <p className="text-[15px] font-medium">{dragging ? 'Drop the PDF to upload' : 'Drag & drop a PDF book here'}</p>
         <p className="text-sm text-muted-foreground">
-          or <span className="font-medium text-foreground underline underline-offset-4">click to browse</span>
+          or <span className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 group-hover:decoration-foreground">browse your files</span>
         </p>
       </div>
       <p className="text-xs text-muted-foreground">
