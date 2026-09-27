@@ -201,3 +201,10 @@ model ProcessingStep {
 
   @@unique([projectId, key])
 }
+
+/// Machine-wide settings changed from the UI (e.g. the power mode the worker follows live).
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

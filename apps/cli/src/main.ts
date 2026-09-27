@@ -62,6 +62,8 @@ Options for create:
   --no-llm                  Do not use the local LLM (Ollama)
   --ocr auto|off|force      OCR for scanned pages (needs tesseract)
   --password <pw>           Password for protected PDFs
+  --power <mode>            silent | quiet | balanced | fast (default: balanced; quiet on battery)
+                            silent = efficiency cores only, quiet ≈ 2 cores, balanced ≈ 4 cores
   --force                   Ignore caches and redo everything
   --verbose                 Developer logs
 `;
@@ -132,6 +134,7 @@ async function cmdCreate(args: string[]) {
       'no-llm': { type: 'boolean' },
       ocr: { type: 'string' },
       password: { type: 'string' },
+      power: { type: 'string' },
       force: { type: 'boolean' },
       verbose: { type: 'boolean' },
     },
@@ -141,7 +144,9 @@ async function cmdCreate(args: string[]) {
   const pdfPath = resolveArg(file);
   if (!fs.existsSync(pdfPath)) throw new Error(`File not found: ${pdfPath}`);
 
-  const cfg = loadConfig();
+  const modes = ['silent', 'quiet', 'balanced', 'fast'];
+  if (values.power && !modes.includes(values.power)) throw new Error(`--power must be one of: ${modes.join(', ')}`);
+  const cfg = values.power ? loadConfig({ PERFORMANCE_MODE: values.power as 'balanced' }) : loadConfig();
   const log = createLogger('cli', values.verbose ? 'debug' : 'warn');
   const engine = (values.engine ?? cfg.TTS_ENGINE) as ProjectSettings['tts']['engine'];
   const partial: DeepPartial<ProjectSettings> = {
@@ -187,7 +192,7 @@ async function cmdCreate(args: string[]) {
     controller.abort();
   });
 
-  console.log(`    voice ${settings.tts.engine}/${settings.tts.voice} · ${settings.outputMode === 'audiobook_video' ? `${settings.video.width}x${settings.video.height}@${settings.video.fps} ${settings.video.animation}` : 'audio only'}\n`);
+  console.log(`    power ${cfg.PERFORMANCE_MODE}${cfg.QUIET_ON_BATTERY ? ' (quiet on battery)' : ''} · voice ${settings.tts.engine}/${settings.tts.voice} · ${settings.outputMode === 'audiobook_video' ? `${settings.video.width}x${settings.video.height}@${settings.video.fps} ${settings.video.animation}` : 'audio only'}\n`);
   const started = Date.now();
   const runner = new PipelineRunner(cfg, store, log, { onSnapshot: (s, steps) => printer.update(s, steps) });
   const result = await runner.run(

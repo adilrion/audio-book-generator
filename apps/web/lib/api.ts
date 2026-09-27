@@ -2,6 +2,8 @@ import type {
   ChapterEdit,
   ChapterSummary,
   HealthReport,
+  PerformancePrefs,
+  PerformanceStatus,
   OutputFile,
   ProgressSnapshot,
   ProjectDetail,
@@ -158,6 +160,8 @@ export const api = {
   health: (fresh = false, signal?: AbortSignal) => request<HealthReport>(`/system/health${fresh ? '?fresh=1' : ''}`, { signal }),
   voices: (engine: string, signal?: AbortSignal) => request<VoicesResponse>(`/system/voices?engine=${encodeURIComponent(engine)}`, { signal }),
   config: (signal?: AbortSignal) => request<SystemConfig>('/system/config', { signal }),
+  performance: (signal?: AbortSignal) => request<PerformanceStatus>('/system/performance', { signal }),
+  setPerformance: (patch: Partial<PerformancePrefs>) => request<PerformanceStatus>('/system/performance', json('PUT', patch)),
 };
 
 /** Absolute URL of an API path, e.g. an OutputFile.url. */

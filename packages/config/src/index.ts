@@ -51,6 +51,9 @@ const schema = z.object({
   FFMPEG_BIN: z.string().default('ffmpeg'),
   FFPROBE_BIN: z.string().default('ffprobe'),
 
+  /** silent | quiet | balanced | fast — starting power mode (the UI can change it live). */
+  PERFORMANCE_MODE: z.enum(['silent', 'quiet', 'balanced', 'fast']).default('balanced'),
+  QUIET_ON_BATTERY: bool.default(true),
   MAX_CONCURRENT_TTS: int(2),
   MAX_CONCURRENT_PDF_RENDER: int(2),
   MAX_CONCURRENT_LLM: int(1),

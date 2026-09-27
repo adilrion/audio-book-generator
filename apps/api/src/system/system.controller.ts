@@ -1,10 +1,11 @@
-import { Controller, Get, Inject, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Put, Query } from '@nestjs/common';
 import { DEFAULT_VOICES, checkLocalEnvironment, createTTSProvider, ttsEngineNames } from '@app/pipeline';
 import { DEFAULT_SETTINGS, type HealthCheck, type HealthReport, type VoiceInfo } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { badRequest } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
+import { PerformanceService } from './performance.service';
 import { PythonService } from './python.service';
 
 @Controller('system')
@@ -16,7 +17,19 @@ export class SystemController {
     private readonly prisma: PrismaService,
     private readonly queue: QueueService,
     private readonly python: PythonService,
+    private readonly performance: PerformanceService,
   ) {}
+
+  /** Power mode (silent / quiet / balanced / fast), quiet-on-battery and pause. */
+  @Get('performance')
+  getPerformance() {
+    return this.performance.status();
+  }
+
+  @Put('performance')
+  setPerformance(@Body() body: unknown) {
+    return this.performance.update(body);
+  }
 
   @Get('health')
   async health(@Query('fresh') fresh?: string): Promise<HealthReport> {

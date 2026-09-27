@@ -94,5 +94,7 @@ export interface ProgressSnapshot {
   totalChapters?: number;
   warnings?: string[];
   error?: UserFacingError;
+  /** Power mode in effect for this run (processing may be paused). */
+  power?: { mode: string; requestedMode: string; reason?: string; paused: boolean };
   updatedAt: string;
 }

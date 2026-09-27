@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
 import { HealthBanner } from '@/components/health-banner';
+import { PowerControl } from '@/components/power-control';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -193,6 +194,10 @@ export function Dashboard() {
           <ProjectTable projects={projects.data} now={now} />
         </>
       ) : null}
+
+      <div className="max-w-xl">
+        <PowerControl active={!!projects.data?.some((p) => isActive(p.status))} />
+      </div>
     </div>
   );
 }

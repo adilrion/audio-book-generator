@@ -21,5 +21,6 @@ export * from './timeline/subtitles';
 export * from './pipeline/store';
 export * from './pipeline/paths';
 export * from './pipeline/runner';
+export * from './pipeline/performance';
 export * from './health';
 export * from './maintenance';

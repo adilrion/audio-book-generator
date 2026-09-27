@@ -8,6 +8,7 @@ import { ApiErrorAlert } from '@/components/api-error-alert';
 import { ChapterReview } from '@/components/chapter-review';
 import { ChaptersList } from '@/components/chapters-list';
 import { OutputsList } from '@/components/outputs-list';
+import { PowerControl } from '@/components/power-control';
 import { ProcessingPanel } from '@/components/processing-panel';
 import { ProjectActions } from '@/components/project-actions';
 import { ReadAlongPlayer } from '@/components/read-along-player';
@@ -248,6 +249,13 @@ export function ProjectView({ id, initialTime }: { id: string; initialTime?: num
         </Card>
 
         <div className="grid gap-6">
+          {phase !== 'completed' && (
+            <PowerControl
+              active={phase === 'active' || phase === 'queued'}
+              withVideo={!audioOnly}
+              narrationSec={p.durationSec ?? (p.wordCount ? (p.wordCount / 175) * 60 : undefined)}
+            />
+          )}
           <Card className="gap-3 pb-0">
             <CardHeader>
               <CardTitle>Export</CardTitle>

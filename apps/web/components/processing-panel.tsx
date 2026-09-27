@@ -112,8 +112,10 @@ export function ProcessingPanel({ project }: { project: ProjectDetail }) {
   const runSteps = currentRunSteps(project);
   const cachedSteps = runSteps.filter((s) => s.status === 'COMPLETED' && s.cached).length;
 
-  const heading =
-    phase === 'completed'
+  const paused = phase === 'active' && !!snap?.power?.paused;
+  const heading = paused
+    ? 'Paused'
+    : phase === 'completed'
       ? 'Finished'
       : phase === 'failed'
         ? 'Stopped with an error'

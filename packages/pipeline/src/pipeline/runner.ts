@@ -49,6 +49,7 @@ import { buildCues, toSrt, youtubeChapters } from '../timeline/subtitles';
 import { createTTSProvider } from '../tts/registry';
 import type { TTSProvider, TTSSegment } from '../tts/types';
 import { CachePaths, type ProjectManifest } from './paths';
+import { PerformanceController, machineInfo, type PoolRole } from './performance';
 import type { OutputRecord, PipelineStore } from './store';
 
 export const EXTRACT_VERSION = 'extract-v1';
@@ -77,6 +78,8 @@ export interface RunnerDeps {
   tts?: (engine: string, pool: PythonPool) => TTSProvider;
   /** Called on every snapshot (e.g. CLI progress bar). */
   onSnapshot?: (s: ProgressSnapshot, steps: StepRecord[]) => void;
+  /** Live power mode (worker: read from the database). Default: PERFORMANCE_MODE from .env. */
+  performance?: PerformanceController;
 }
 
 export interface PipelineResult {
@@ -105,6 +108,9 @@ export class PipelineRunner {
   private force = false;
   private signal?: AbortSignal;
   private pools: PythonPool[] = [];
+  private perf!: PerformanceController;
+  private slotActive = { tts: 0, render: 0 };
+  private slotWaiters: (() => void)[] = [];
   // Store writes land in order: a slow early write must never overwrite a later state.
   private snapshotWrite?: Promise<void>;
   private queuedSnapshot?: ProgressSnapshot;
@@ -132,7 +138,7 @@ export class PipelineRunner {
   }
 
   private emit(patch: Partial<ProgressSnapshot>, force = false) {
-    this.snapshot = { ...this.snapshot, ...patch, progress: this.overall(), warnings: this.warnings, updatedAt: new Date().toISOString() };
+    this.snapshot = { ...this.snapshot, ...patch, progress: this.overall(), warnings: this.warnings, power: this.powerSnapshot(), updatedAt: new Date().toISOString() };
     this.deps.onSnapshot?.(this.snapshot, [...this.steps.values()]);
     const now = Date.now();
     if (force || now - this.lastFlush > 700) {
@@ -234,10 +240,40 @@ export class PipelineRunner {
     return this.force ? Promise.resolve(false) : exists(p);
   }
 
-  private pool(size: number, env: Record<string, string> = {}): PythonPool {
-    const p = new PythonPool(this.cfg, size, env, this.log.child('py'));
+  private pool(role: PoolRole): PythonPool {
+    const p = new PythonPool(this.cfg, this.perf.size(role), this.perf.env(role), this.log.child('py'));
+    this.perf.attach(p, role);
     this.pools.push(p);
     return p;
+  }
+
+  private async endPool(pool: PythonPool) {
+    this.perf.detach(pool);
+    await pool.shutdown();
+  }
+
+  /** At most `perf.size(role)` chapters of a stage run at once; the limit follows the live power mode. */
+  private async withSlot<T>(role: 'tts' | 'render', fn: () => Promise<T>): Promise<T> {
+    while (this.slotActive[role] >= this.perf.size(role) || this.perf.current.paused) {
+      this.checkCancelled();
+      await new Promise<void>((r) => this.slotWaiters.push(r));
+    }
+    this.slotActive[role]++;
+    try {
+      return await fn();
+    } finally {
+      this.slotActive[role]--;
+      this.wakeSlots();
+    }
+  }
+
+  private wakeSlots() {
+    for (const w of this.slotWaiters.splice(0)) w();
+  }
+
+  private powerSnapshot(): ProgressSnapshot['power'] {
+    const p = this.perf?.current;
+    return p ? { mode: p.mode, requestedMode: p.requestedMode, reason: p.reason, paused: p.paused } : undefined;
   }
 
   // ───────────────────────────── main ─────────────────────────────
@@ -278,7 +314,22 @@ export class PipelineRunner {
       await saveManifest();
     };
 
-    const mainPool = this.pool(1);
+    const ownsPerf = !this.deps.performance;
+    this.perf =
+      this.deps.performance ??
+      new PerformanceController(
+        machineInfo(this.cfg.MAX_CONCURRENT_TTS, this.cfg.MAX_CONCURRENT_PDF_RENDER),
+        { mode: this.cfg.PERFORMANCE_MODE, quietOnBattery: this.cfg.QUIET_ON_BATTERY, paused: false },
+        undefined,
+        this.log.child('power'),
+      );
+    if (ownsPerf) await this.perf.start();
+    this.perf.onChange((p) => {
+      this.wakeSlots();
+      this.emit({ message: p.paused ? 'Paused — press Resume to continue. Nothing is lost.' : `Running in ${p.mode} mode${p.reason ? ` (${p.reason})` : ''}.` }, true);
+    });
+    this.signal?.addEventListener('abort', () => this.wakeSlots(), { once: true });
+    const mainPool = this.pool('main');
     try {
       this.emit({ status: 'EXTRACTING', message: 'Starting', error: undefined }, true);
 
@@ -404,6 +455,7 @@ export class PipelineRunner {
       await this.step('AUDIO_MERGE', 'AUDIO_MERGE', async (report) => {
         if (!this.force && manifest.masterKey === masterKey && (await exists(m4a))) return { value: null, cached: true };
         await invalidate('masterKey'); // the file is replaced below; never let an old key vouch for it
+        await this.perf.waitIfPaused();
         await masterAudio(this.cfg, audios.map((a) => a.file), m4a, {
           normalize: s.audio.normalize,
           title: analysis.title,
@@ -471,6 +523,7 @@ export class PipelineRunner {
           await saveManifest();
           await this.step('MUX', 'MUX', async () => {
             this.setStage('MUX', 0.2, 'Combining video, audio and subtitles');
+            await this.perf.waitIfPaused();
             await muxFinal(this.cfg, reuseFinalVideo ? [mp4] : segs.map((v) => v.file), m4a, mp4, {
               srt: s.video.embedSubtitles ? path.join(outDir, 'subtitles.srt') : undefined,
               title: analysis.title,
@@ -512,10 +565,12 @@ export class PipelineRunner {
       await this.persistSnapshot();
       await Promise.all([...this.stepWrites.values()].map((w) => w.catch(() => undefined)));
       for (const p of this.pools) {
+        this.perf.detach(p);
         if (this.signal?.aborted) p.killAll();
         else await p.shutdown();
       }
       this.pools = [];
+      if (ownsPerf) await this.perf.stop();
     }
   }
 
@@ -573,8 +628,7 @@ export class PipelineRunner {
 
   private async runTts(job: PipelineJob, chapters: Chapter[], onPlanned: (keys: string[]) => Promise<void>): Promise<ChapterAudio[]> {
     const s = job.settings;
-    const threads = Math.max(1, Math.floor(this.cfg.cpuCount / this.cfg.MAX_CONCURRENT_TTS));
-    const pool = this.pool(this.cfg.MAX_CONCURRENT_TTS, { KOKORO_THREADS: String(threads), OMP_NUM_THREADS: String(threads) });
+    const pool = this.pool('tts');
     const provider = this.deps.tts ? this.deps.tts(s.tts.engine, pool) : createTTSProvider(s.tts.engine, pool);
     const plans = chapters.map((c) => {
       const segments = PipelineRunner.chapterSegments(c, s);
@@ -612,7 +666,7 @@ export class PipelineRunner {
       await assertDiskSpace(this.cfg.storage.root, estSec * this.cfg.TTS_SAMPLE_RATE * 2 * 0.7, this.cfg.DISK_RESERVE_GB * 1e9, 'audio generation');
     }
 
-    const results = await mapLimit(plans, this.cfg.MAX_CONCURRENT_TTS, async (p) => {
+    const results = await mapLimit(plans, Math.max(1, this.cfg.MAX_CONCURRENT_TTS), async (p) => this.withSlot('tts', async () => {
       const label = /^(chapter|part|section)\b/i.test(p.c.title) ? `“${p.c.title}”` : `${chapterLabel(p.c)} “${p.c.title}”`;
       return this.step(
         `TTS_CHAPTER_${p.c.index + 1}`,
@@ -670,8 +724,8 @@ export class PipelineRunner {
         },
         p.c.index,
       );
-    });
-    await pool.shutdown(); // hand Kokoro's memory back before video rendering
+    }));
+    await this.endPool(pool); // hand Kokoro's memory back before video rendering
     this.setStage('TTS', 1, 'Narration complete');
     return results;
   }
@@ -708,7 +762,7 @@ export class PipelineRunner {
   private async renderVideo(job: PipelineJob, plans: ReturnType<PipelineRunner['planVideo']>, timeline: Timeline) {
     const v = job.settings.video;
     const fps = v.fps;
-    const pool = this.pool(this.cfg.MAX_CONCURRENT_PDF_RENDER, { OMP_NUM_THREADS: '2', OPENCV_NUM_THREADS: '2' });
+    const pool = this.pool('render');
     const totalFrames = plans.reduce((n, p) => n + (p.frameEnd - p.frameStart), 0) || 1;
     const done = new Map<number, number>();
     const tick = (msg: string, ch: number) =>
@@ -722,8 +776,8 @@ export class PipelineRunner {
       await assertDiskSpace(this.cfg.storage.root, ((secs * bps) / 8) * 2.2 + 400e6, this.cfg.DISK_RESERVE_GB * 1e9, 'video rendering');
     }
 
-    const out = await mapLimit(plans, this.cfg.MAX_CONCURRENT_PDF_RENDER, async (p) =>
-      this.step(
+    const out = await mapLimit(plans, Math.max(1, this.cfg.MAX_CONCURRENT_PDF_RENDER), async (p) =>
+      this.withSlot('render', () => this.step(
         `VIDEO_CHAPTER_${p.tc.index + 1}`,
         'VIDEO',
         async (report) => {
@@ -782,9 +836,9 @@ export class PipelineRunner {
           return { value: { key: p.key, file: p.file }, cached: false, message: `${r.fpsAchieved} fps (${r.codec})` };
         },
         p.tc.index,
-      ),
+      )),
     );
-    await pool.shutdown();
+    await this.endPool(pool);
     return out;
   }
 

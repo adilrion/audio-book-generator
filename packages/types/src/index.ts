@@ -5,3 +5,4 @@ export * from './analysis';
 export * from './audio';
 export * from './timeline';
 export * from './api';
+export * from './performance';

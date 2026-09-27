@@ -32,6 +32,12 @@ class KokoroEngine(TTSEngine):
         threads = int(os.environ.get("KOKORO_THREADS", "0") or 0)
         if threads > 0:
             so.intra_op_num_threads = threads
+            so.inter_op_num_threads = 1
+        # onnxruntime threads busy-wait between operators by default: pure heat, no speed on M-series
+        # (measured). KOKORO_SPIN=1 restores it.
+        if os.environ.get("KOKORO_SPIN", "0") != "1":
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            so.add_session_config_entry("session.inter_op.allow_spinning", "0")
         provider = os.environ.get("KOKORO_PROVIDER", "cpu").lower()
         providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"] if provider == "coreml" else ["CPUExecutionProvider"]
         session = ort.InferenceSession(model, sess_options=so, providers=providers)

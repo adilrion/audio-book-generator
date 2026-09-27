@@ -1,13 +1,14 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import type { Prisma } from '@prisma/client';
-import { PipelineRunner } from '@app/pipeline';
+import { PerformanceController, PipelineRunner, machineInfo } from '@app/pipeline';
 import { createLogger, describeError, type AppError } from '@app/shared';
 import { resolveSettings, type DeepPartial, type ProjectSettings } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { toUserError } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { QUEUE_NAME, redisConnection, type ProcessJobData } from '../queue/queue.service';
+import { readPerformancePrefs } from '../system/performance.service';
 import { PrismaStore } from './prisma-store';
 import { WorkerLock, type LockClient } from './worker-lock';
 
@@ -145,9 +146,20 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
       }
     }, 1500);
 
+    let perfStop: (() => Promise<void>) | undefined;
     try {
       const settings = resolveSettings(project.settings as DeepPartial<ProjectSettings>);
-      const runner = new PipelineRunner(this.cfg, new PrismaStore(this.prisma, projectId), createLogger(`project:${projectId.slice(0, 8)}`, this.cfg.LOG_LEVEL));
+      const log = createLogger(`project:${projectId.slice(0, 8)}`, this.cfg.LOG_LEVEL);
+      // The power mode is machine-wide and changes live: the UI writes it, this reads it every 3 s.
+      const performance = new PerformanceController(
+        machineInfo(this.cfg.MAX_CONCURRENT_TTS, this.cfg.MAX_CONCURRENT_PDF_RENDER),
+        await readPerformancePrefs(this.prisma, this.cfg),
+        () => readPerformancePrefs(this.prisma, this.cfg).catch(() => undefined),
+        log.child('power'),
+      );
+      await performance.start();
+      perfStop = () => performance.stop();
+      const runner = new PipelineRunner(this.cfg, new PrismaStore(this.prisma, projectId), log, { performance });
       const result = await runner.run(
         { projectId, pdfPath: project.document.filePath, pdfHash: project.document.hash, title: project.name, settings },
         { force, signal: controller.signal },
@@ -167,6 +179,7 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
       await this.recordFailure(projectId, e, interrupted).catch(() => undefined);
       // Failure is fully recorded in the DB; don't let BullMQ retry automatically.
     } finally {
+      await perfStop?.().catch(() => undefined);
       clearInterval(poll);
       this.controllers.delete(projectId);
     }

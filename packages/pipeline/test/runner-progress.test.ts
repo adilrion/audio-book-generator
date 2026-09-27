@@ -96,21 +96,49 @@ describe.skipIf(!hasPython || !hasFfmpeg)('runner progress, persistence and erro
     expect(err.hint).toMatch(/MAX_CONCURRENT_TTS/);
   }, 120_000);
 
-  it('a crashed render worker reports which chapter failed', async () => {
-    const tts = new FakeTTS({ perWord: 1 });
-    let killed = false;
-    const runner = new PipelineRunner(cfg, new MemoryStore(), undefined, {
-      tts: () => tts,
-      onSnapshot: (s) => {
-        if (killed || s.stage !== 'VIDEO' || !/frame/.test(s.message ?? '')) return;
-        killed = true; // simulate macOS killing the renderer (memory pressure)
-        const rows = execFileSync('ps', ['-axo', 'pid,ppid,command']).toString().split('\n');
-        for (const l of rows)
-          if (l.includes('audiobook_worker.server') && Number(l.trim().split(/\s+/)[1]) === process.pid) process.kill(Number(l.trim().split(/\s+/)[0]), 'SIGKILL');
+  /** Up to `times` times, when a (new) renderer reports frames, kill every Python child of this test. */
+  function killRenderer(times: number) {
+    const killed = new Set<number>();
+    let kills = 0;
+    return {
+      get kills() {
+        return kills;
       },
-    });
+      onSnapshot: (s: { stage?: string; message?: string }) => {
+        if (kills >= times || s.stage !== 'VIDEO' || !/frame|rendering pages/.test(s.message ?? '')) return;
+        const rows = execFileSync('ps', ['-axo', 'pid,ppid,command']).toString().split('\n');
+        const fresh = rows
+          .filter((l) => l.includes('audiobook_worker.server'))
+          .map((l) => l.trim().split(/\s+/).map(Number))
+          .filter(([pid, ppid]) => ppid === process.pid && !killed.has(pid))
+          .map(([pid]) => pid);
+        if (!fresh.length) return;
+        kills++; // simulate macOS killing the renderer (memory pressure)
+        for (const pid of fresh) {
+          killed.add(pid);
+          process.kill(pid, 'SIGKILL');
+        }
+      },
+    };
+  }
+
+  it('a render worker that dies once is restarted and the chapter is retried', async () => {
+    const tts = new FakeTTS({ perWord: 1 });
+    const k = killRenderer(1);
+    const r = await new PipelineRunner(cfg, new MemoryStore(), undefined, { tts: () => tts, onSnapshot: k.onSnapshot }).run(
+      job('crash-once', { settings: { ...settings, video: { ...settings.video, width: 192, height: 108 } } }),
+    );
+    expect(k.kills).toBe(1);
+    expect(r.outputs.map((o) => o.name)).toContain('audiobook.mp4');
+    expect(r.warnings).toContain('A processing worker stopped unexpectedly and was restarted automatically.');
+  }, 120_000);
+
+  it('a render worker that keeps dying reports which chapter failed', async () => {
+    const tts = new FakeTTS({ perWord: 1 });
+    const k = killRenderer(Infinity);
+    const runner = new PipelineRunner(cfg, new MemoryStore(), undefined, { tts: () => tts, onSnapshot: k.onSnapshot });
     const err = await runner.run(job('crash', { settings: { ...settings, video: { ...settings.video, width: 192, height: 108 } } })).catch((e) => e);
-    expect(killed).toBe(true);
+    expect(k.kills).toBeGreaterThanOrEqual(2);
     expect(err.message).toMatch(/^Video rendering failed for Chapter \d\.$/);
     expect(err.hint).toMatch(/finished chapters are kept/);
     expect(err.stepKey).toMatch(/^VIDEO_CHAPTER_\d$/);

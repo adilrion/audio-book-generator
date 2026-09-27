@@ -51,7 +51,14 @@ export class PythonProcess {
     private readonly cfg: AppConfig,
     private readonly env: Record<string, string> = {},
     private readonly log: Logger = silentLogger,
+    /** Command prefix that execs Python in place, e.g. ['/usr/bin/nice', '-n', '5'] (same PID). */
+    private readonly prefix: string[] = [],
   ) {}
+
+  /** OS process id while running. */
+  get pid(): number | undefined {
+    return this.alive ? this.proc?.pid : undefined;
+  }
 
   get alive(): boolean {
     return !!this.proc && !this.exited;
@@ -62,7 +69,8 @@ export class PythonProcess {
     this.exited = false;
     this.stderrTail = [];
     this.ready = new Promise<void>((resolve, reject) => {
-      const proc = spawn(this.cfg.PYTHON_BIN, ['-u', '-m', 'audiobook_worker.server'], {
+      const argv = [...this.prefix, this.cfg.PYTHON_BIN, '-u', '-m', 'audiobook_worker.server'];
+      const proc = spawn(argv[0], argv.slice(1), {
         cwd: this.cfg.repoRoot,
         env: {
           ...process.env,
@@ -210,36 +218,93 @@ export class PythonProcess {
 
 /** Fixed-size pool of Python processes. Processes are started lazily and can be shut down
  *  between stages to hand memory back (e.g. unload Kokoro before video rendering). */
+export interface PoolConfig {
+  size?: number;
+  env?: Record<string, string>;
+  prefix?: string[];
+  /** Awaited before each call (e.g. while processing is paused). */
+  gate?: () => Promise<void>;
+}
+
 export class PythonPool {
   private procs: PythonProcess[] = [];
   private idle: PythonProcess[] = [];
   private waiters: ((p: PythonProcess) => void)[] = [];
+  /** processes started with an older configuration are retired when they become idle */
+  private gen = 0;
+  private readonly procGen = new WeakMap<PythonProcess, number>();
+  private gate?: () => Promise<void>;
+  private prefix: string[] = [];
 
   constructor(
     private readonly cfg: AppConfig,
-    readonly size: number,
-    private readonly env: Record<string, string> = {},
+    public size: number,
+    private env: Record<string, string> = {},
     private readonly log: Logger = silentLogger,
   ) {}
+
+  /**
+   * Change size / environment / spawn prefix while the pool is in use. Busy processes finish their
+   * current call (a chapter) and are then replaced; idle ones are replaced right away.
+   */
+  configure(c: PoolConfig): void {
+    if (c.gate) this.gate = c.gate;
+    const envChanged = (c.env && JSON.stringify(c.env) !== JSON.stringify(this.env)) || (c.prefix && JSON.stringify(c.prefix) !== JSON.stringify(this.prefix));
+    if (c.env) this.env = c.env;
+    if (c.prefix) this.prefix = c.prefix;
+    if (c.size !== undefined) this.size = Math.max(1, c.size);
+    if (envChanged) {
+      this.gen++;
+      for (const p of this.idle.splice(0)) this.retire(p);
+    }
+    while (this.idle.length && this.procs.length > this.size) this.retire(this.idle.pop()!);
+    // Room for more processes now: hand fresh ones to callers that are waiting.
+    while (this.waiters.length && this.procs.length < this.size) this.waiters.shift()!(this.spawn());
+  }
+
+  /** PIDs of running processes (for pause / QoS changes). */
+  pids(): number[] {
+    return this.procs.map((p) => p.pid).filter((x): x is number => x !== undefined);
+  }
+
+  private spawn(): PythonProcess {
+    const np = new PythonProcess(this.cfg, this.env, this.log, this.prefix);
+    this.procGen.set(np, this.gen);
+    this.procs.push(np);
+    return np;
+  }
+
+  private retire(p: PythonProcess) {
+    this.procs = this.procs.filter((x) => x !== p);
+    this.idle = this.idle.filter((x) => x !== p);
+    void p.stop();
+  }
 
   private async acquire(): Promise<PythonProcess> {
     const p = this.idle.pop();
     if (p) return p;
-    if (this.procs.length < this.size) {
-      const np = new PythonProcess(this.cfg, this.env, this.log);
-      this.procs.push(np);
-      return np;
-    }
+    if (this.procs.length < this.size) return this.spawn();
     return new Promise((r) => this.waiters.push(r));
   }
 
   private release(p: PythonProcess) {
+    if (this.procGen.get(p) !== this.gen || this.procs.length > this.size) {
+      this.retire(p);
+      if (this.waiters.length && this.procs.length < this.size) this.waiters.shift()!(this.spawn());
+      return;
+    }
     const w = this.waiters.shift();
     if (w) w(p);
     else this.idle.push(p);
   }
 
   async call<T>(method: string, params: unknown, opts: CallOptions = {}): Promise<T> {
+    if (this.gate) {
+      // Held while processing is paused — but Cancel must still get through.
+      const aborted = new Promise<void>((r) => opts.signal?.addEventListener('abort', () => r(), { once: true }));
+      await Promise.race([this.gate(), aborted]);
+      if (opts.signal?.aborted) throw new CancelledError();
+    }
     const p = await this.acquire();
     try {
       return await p.call<T>(method, params, opts);

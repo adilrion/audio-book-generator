@@ -13,6 +13,10 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+# Measured: single-threaded OpenCV renders as fast as multi-threaded (the frame loop is the
+# bottleneck) with a third less CPU. The power mode can raise it via RENDER_THREADS.
+cv2.setNumThreads(max(1, int(os.environ.get("RENDER_THREADS", "1") or 1)))
+
 from . import layout
 
 THEMES = {
