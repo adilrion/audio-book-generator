@@ -119,7 +119,8 @@ export class PrismaStore implements PipelineStore {
       for (const para of c.paragraphs) {
         const pid = randomUUID();
         paragraphs.push({ id: pid, chapterId: cid, index: para.index, kind: para.kind, text: para.text, pageStart: para.pageStart, pageEnd: para.pageEnd, regions: json(para.regions) });
-        for (const s of para.sentences) sentences.push({ paragraphId: pid, key: s.id, index: s.index, text: s.text, narration: s.narration, regions: json(s.regions) });
+        for (const s of para.sentences)
+          sentences.push({ paragraphId: pid, key: s.id, index: s.index, text: s.text, narration: s.narration, repairedFrom: s.repairedFrom ?? null, regions: json(s.regions) });
       }
     }
     await this.prisma.$transaction(

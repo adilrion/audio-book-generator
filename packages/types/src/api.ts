@@ -58,3 +58,16 @@ export interface ChapterSummary {
   preview?: string;
   wordCount?: number;
 }
+
+/** A sentence whose extraction damage the local AI repaired (GET /projects/:id/repairs). */
+export interface TextRepair {
+  /** Stable sentence id, e.g. c3-p12-s1 */
+  sentenceId: string;
+  chapterIndex: number;
+  chapterTitle: string;
+  page: number;
+  /** What the voice would have read. */
+  before: string;
+  /** What the voice reads instead. */
+  after: string;
+}

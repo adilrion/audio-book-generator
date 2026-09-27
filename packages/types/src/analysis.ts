@@ -26,6 +26,8 @@ export interface Sentence {
   regions: PageRegion[];
   /** The printed words in reading order, for word and cursor highlighting. */
   words?: WordBox[];
+  /** The narration before the local AI repaired extraction damage in it (only set when it did). */
+  repairedFrom?: string;
 }
 
 export type ParagraphKind = 'heading' | 'body';

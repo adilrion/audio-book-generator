@@ -10,7 +10,7 @@ import { restoreSectionOpenings } from './dropcaps';
 import { regionsFor, wordBoxes } from './regions';
 import { splitSentences } from './sentences';
 
-export const ANALYZER_VERSION = 'analyze-v3';
+export const ANALYZER_VERSION = 'analyze-v4';
 
 export interface CleanResult {
   pages: CleanPage[];
@@ -39,7 +39,8 @@ export function looksBroken(text: string): boolean {
   if (/[\ufffd\ufb00-\ufb06]/.test(text)) return true; // replacement char / unresolved ligatures
   const letters = text.replace(/[^\p{L}]/gu, '').length;
   // Only symbols that ordinary prose never uses count as damage (brackets, #, * etc. are normal).
-  const odd = text.replace(/[\p{L}\p{N}\p{Z}\p{P}$%&+=<>|~^`°§¶©®™±×÷€£¥¢\u2010-\u2015]/gu, '').length;
+  // \p{M}: combining marks are part of letters in many scripts (Bangla vowel signs া ি ে, hasanta ্; accents).
+  const odd = text.replace(/[\p{L}\p{M}\p{N}\p{Z}\p{P}$%&+=<>|~^`°§¶©®™±×÷€£¥¢\u2010-\u2015\u200c\u200d]/gu, '').length;
   if (letters >= 20 && odd / letters > 0.08) return true;
   if (tokens.filter((t) => /^\p{L}{26,}$/u.test(t)).length >= 2) return true; // glued words
   return false;
@@ -163,16 +164,20 @@ export async function analyzeCleaned(clean: CleanResult, meta: ExtractionMeta, o
     const broken = chapters.flatMap((c) => c.paragraphs).filter((p) => looksBroken(p.text)).slice(0, 300);
     if (broken.length) {
       log.info(`LLM repair for ${broken.length} suspicious paragraphs`);
-      await mapLimit(broken, 2, async (p, i) => {
+      let done = 0;
+      opts.onProgress?.(3, 4, `Repairing damaged text — 0 of ${broken.length} paragraphs`);
+      await mapLimit(broken, 2, async (p) => {
         const fixed = await opts.llm!.repairSentences(p.sentences.map((s) => s.narration), opts.signal);
-        opts.onProgress?.(3 + i / broken.length, 4, 'Repairing damaged text');
-        if (!fixed) return;
-        p.sentences.forEach((s, k) => {
-          if (fixed[k] && fixed[k] !== s.narration) {
-            s.narration = fixed[k];
-            llmRepairs++;
-          }
-        });
+        done++;
+        if (fixed)
+          p.sentences.forEach((s, k) => {
+            if (fixed[k] && fixed[k] !== s.narration) {
+              s.repairedFrom = s.narration; // shown to the user: what the local AI changed
+              s.narration = fixed[k];
+              llmRepairs++;
+            }
+          });
+        opts.onProgress?.(3 + done / broken.length, 4, `Repairing damaged text — ${done} of ${broken.length} paragraphs${llmRepairs ? `, ${llmRepairs} ${llmRepairs === 1 ? 'sentence' : 'sentences'} fixed` : ''}`);
       });
     }
   } else {

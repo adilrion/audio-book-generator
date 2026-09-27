@@ -176,6 +176,30 @@ describe('chapter detection', () => {
     expect(asked).toBe(0); // no heading candidates → nothing to adjudicate
   });
 
+  it('records what the local AI repaired, and reports progress while it works', async () => {
+    const pages = [1, 2].map((n) => page(n, bodyLines([LONG, n === 1 ? 'T h e  q u i c k  b r o w n  f o x  j u m p s  h e r e.' : 'Plain text that is fine.'], 100)));
+    const fakeLlm = {
+      model: 'fake',
+      used: true,
+      available: async () => true,
+      pickChapterHeadings: async () => null,
+      repairSentences: async (sentences: string[]) => sentences.map((x) => (/(\b\p{L} ){5}/u.test(x) ? x.replace(/(?<=\b\p{L}) (?=\p{L}\b)/gu, '') : x)),
+      pronunciations: async () => ({}),
+    };
+    const messages: string[] = [];
+    const a = await analyzeCleaned(cleanDocument(pages), meta(2), { language: 'en', skipFrontMatter: false, llm: fakeLlm as never, onProgress: (_d, _t, m) => m && messages.push(m) });
+    const repaired = a.chapters.flatMap((c) => c.paragraphs.flatMap((p) => p.sentences)).filter((x) => x.repairedFrom);
+    expect(repaired.length).toBe(a.stats.llmRepairs);
+    expect(repaired.length).toBeGreaterThan(0);
+    for (const x of repaired) {
+      expect(x.repairedFrom).toMatch(/q u i c k/);
+      expect(x.narration).not.toBe(x.repairedFrom);
+      expect(x.text).toMatch(/q u i c k/); // the printed text is never changed
+    }
+    expect(messages).toContain('Repairing damaged text — 0 of 1 paragraphs');
+    expect(messages.some((m) => /^Repairing damaged text — 1 of 1 paragraphs, \d+ sentences? fixed$/.test(m))).toBe(true);
+  });
+
   it('maps every sentence to highlight rectangles on its page', async () => {
     const pages = book();
     const a = await analyzeCleaned(cleanDocument(pages), meta(pages.length), { language: 'en', skipFrontMatter: false });

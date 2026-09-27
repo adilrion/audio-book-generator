@@ -96,6 +96,7 @@ export interface PipelineResult {
 }
 
 const chapterLabel = (c: Chapter) => `Chapter ${c.index + 1}`;
+const repairNote = (a: Analysis) => (a.stats.llmRepairs ? `, ${a.stats.llmRepairs.toLocaleString()} repaired by local AI` : '');
 
 /**
  * What the compositor needs to draw a chapter. The style is part of every rendered segment's
@@ -392,7 +393,7 @@ export class PipelineRunner {
         analysis = await readJson<Analysis>(analysisFile);
         await this.step('CLEAN', 'CLEAN', async () => ({ value: null, cached: true }));
         this.setStage('CLEAN', 1, 'Text already cleaned (cached)');
-        await this.step('ANALYZE', 'ANALYZE', async () => ({ value: null, cached: true, message: `${analysis.chapters.length} chapters` }));
+        await this.step('ANALYZE', 'ANALYZE', async () => ({ value: null, cached: true, message: `${analysis.chapters.length} chapters${repairNote(analysis)}` }));
       } else {
         const clean = await this.step('CLEAN', 'CLEAN', async () => {
           this.setStage('CLEAN', 0.1, 'Loading extracted text');
@@ -419,7 +420,7 @@ export class PipelineRunner {
             },
           });
           await atomicWriteJson(analysisFile, a);
-          return { value: a, cached: false, message: `${a.chapters.length} chapters (${a.stats.chapterSource}), ${a.stats.sentences.toLocaleString()} sentences` };
+          return { value: a, cached: false, message: `${a.chapters.length} chapters (${a.stats.chapterSource}), ${a.stats.sentences.toLocaleString()} sentences${repairNote(a)}` };
         });
       }
       this.warnings.push(...analysis.warnings.filter((w) => !this.warnings.includes(w)));

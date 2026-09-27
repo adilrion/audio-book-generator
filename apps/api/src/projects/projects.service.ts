@@ -13,10 +13,12 @@ import {
   type PdfInspection,
   type ProgressSnapshot,
   type ChapterSummary,
+  type PageRegion,
   type ProjectDetail,
   type ProjectSettings,
   type ProjectSummary,
   type StepRecord,
+  type TextRepair,
 } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { badRequest, conflict, notFound } from '../common/errors';
@@ -298,6 +300,28 @@ export class ProjectsService {
   outputPath(id: string, name: string): string {
     if (!/^[a-z0-9._-]+$/i.test(name) || name.startsWith('.')) throw notFound('File');
     return path.join(this.outputDir(id), name);
+  }
+
+  /** Sentences the local AI repaired, in reading order (at most 1000). */
+  async repairs(id: string): Promise<TextRepair[]> {
+    await this.get(id);
+    const rows = await this.prisma.sentence.findMany({
+      where: { repairedFrom: { not: null }, paragraph: { chapter: { projectId: id } } },
+      select: { key: true, narration: true, repairedFrom: true, regions: true, paragraph: { select: { index: true, pageStart: true, chapter: { select: { index: true, title: true } } } } },
+      take: 1000,
+    });
+    return rows
+      .map((r) => ({
+        sentenceId: r.key,
+        chapterIndex: r.paragraph.chapter.index,
+        chapterTitle: r.paragraph.chapter.title,
+        page: (r.regions as unknown as PageRegion[] | null)?.[0]?.page ?? r.paragraph.pageStart,
+        before: r.repairedFrom!,
+        after: r.narration,
+        order: [r.paragraph.chapter.index, r.paragraph.index, Number(/-s(\d+)$/.exec(r.key)?.[1] ?? 0)],
+      }))
+      .sort((a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.order[2] - b.order[2])
+      .map(({ order: _, ...r }) => r);
   }
 
   async timelinePath(id: string): Promise<string> {

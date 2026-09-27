@@ -545,7 +545,8 @@ audiobook and <kbd>/</kbd> in the library to search.
   Restart, Clean project cache and Delete project; plain-language errors with the matching retry
   action. Three tabs (`?tab=` in the address keeps the one you are on):
   - **Overview**: live progress per stage and per chapter, the downloads, the power mode while
-    processing, and the detected chapters.
+    processing, the detected chapters, and **Text repairs**: every sentence the local AI fixed,
+    as a before → after diff of what the voice reads (the printed text is never changed).
   - **Read-along**: the PDF page with the spoken sentence (or word, or reading cursor) highlighted,
     synced to the audio — it
     works as soon as the narration is ready — and then the final video. `?t=1:23` opens it at that

@@ -18,6 +18,7 @@ import { SettingsPanel } from '@/components/settings-panel';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { TextRepairs } from '@/components/text-repairs';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Segmented, SegmentedItem } from '@/components/ui/segmented';
@@ -293,15 +294,18 @@ export function ProjectView({ id, initialTime, initialTab }: { id: string; initi
           )}
 
           <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <Card className="gap-6">
-              <CardHeader>
-                <CardTitle>Progress</CardTitle>
-                <CardDescription>Every finished step is saved, so an interrupted run resumes where it stopped.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ProcessingPanel project={p} />
-              </CardContent>
-            </Card>
+            <div className="grid min-w-0 gap-6">
+              <Card className="gap-6">
+                <CardHeader>
+                  <CardTitle>Progress</CardTitle>
+                  <CardDescription>Every finished step is saved, so an interrupted run resumes where it stopped.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ProcessingPanel project={p} />
+                </CardContent>
+              </Card>
+              <TextRepairs project={p} />
+            </div>
 
             <div className="grid gap-6">
               {running && <PowerControl withVideo={!audioOnly} narrationSec={p.durationSec ?? (p.wordCount ? (p.wordCount / 175) * 60 : undefined)} />}

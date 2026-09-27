@@ -75,6 +75,11 @@ describe('damaged-text detection', () => {
     expect(looksBroken('Release date: June 1, 1998 [eBook #1342]')).toBe(false);
     expect(looksBroken('*** START OF THE PROJECT GUTENBERG EBOOK PRIDE AND PREJUDICE *** PREFACE.')).toBe(false);
   });
+  it('does not flag scripts whose letters carry combining marks (Bangla, Devanagari, accents)', () => {
+    expect(looksBroken('পোস্টমাস্টার প্রথম কাজ আরম্ভ করিয়াই উলাপুর গ্রামে আসিতে হয়। গ্রামটি অতি সামান্য।')).toBe(false);
+    expect(looksBroken('रवीन्द्रनाथ ठाकुर की यह कहानी एक छोटे से गाँव के डाकघर की है।')).toBe(false);
+    expect(looksBroken('Cafe\u0301 au lait, cre\u0300me bru\u0302le\u0301e and a nai\u0308ve re\u0301sume\u0301 today.')).toBe(false);
+  });
   it('still flags real extraction damage', () => {
     expect(looksBroken('T h e  I n d u s t r i a l  R e v o l u t i o n')).toBe(true);
     expect(looksBroken('The quick brown fox �� jumps over the lazy dog today')).toBe(true);

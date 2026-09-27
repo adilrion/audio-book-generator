@@ -127,6 +127,8 @@ model Sentence {
   index       Int
   text        String
   narration   String
+  /// Narration before the local AI repaired extraction damage in it (null when not repaired)
+  repairedFrom String?
   regions     Json
 
   @@index([key])

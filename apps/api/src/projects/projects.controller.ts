@@ -118,6 +118,11 @@ export class ProjectsController implements OnModuleInit, OnModuleDestroy {
     res.sendFile(file, { acceptRanges: true, dotfiles: 'deny' }); // Range support for audio/video seeking
   }
 
+  @Get(':id/repairs')
+  repairs(@Param('id') id: string) {
+    return this.projects.repairs(id);
+  }
+
   @Get(':id/timeline')
   async timeline(@Param('id') id: string, @Res() res: Response) {
     res.type('application/json').sendFile(await this.projects.timelinePath(id));
