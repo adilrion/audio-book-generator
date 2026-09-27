@@ -1,14 +1,14 @@
 'use client';
 
-import type { HighlightStyle, Timeline } from '@app/types';
+import type { HighlightMode, HighlightStyle, Rect, Timeline, TimelineSegment } from '@app/types';
 import { ChevronsLeft, ChevronsRight, LoaderCircle, Pause, Play, SkipBack, SkipForward, TriangleAlert } from 'lucide-react';
-import { type KeyboardEvent, type MouseEvent, type PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, type MouseEvent, type PointerEvent, type Ref, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { pageImageUrl } from '@/lib/api';
 import { formatClock, formatDuration } from '@/lib/format';
-import { withAlpha } from '@/lib/highlight';
-import { hitTest, pageSizeOf, rectToPercent, segmentIndexAt, segmentsByPage } from '@/lib/timeline';
+import { highlightFill, withAlpha } from '@/lib/highlight';
+import { cursorAt, hitTest, pageSizeOf, rectToPercent, sameLine, segmentIndexAt, segmentsByPage, wordIndexAt } from '@/lib/timeline';
 import { cn } from '@/lib/utils';
 
 const RATES = [0.75, 1, 1.25, 1.5, 2];
@@ -20,6 +20,10 @@ export interface ReadAlongPlayerProps {
   audioSrc: string;
   highlightStyle: HighlightStyle;
   highlightColor: string;
+  /** Word / cursor highlighting needs a timeline built for it (segments carry `words`); otherwise sentences are shown. */
+  highlightMode?: HighlightMode;
+  /** Word / cursor highlighting: tint the whole sentence faintly too. */
+  sentenceTint?: boolean;
   /** Open at this time (seconds), e.g. from a `?t=` deep link. */
   initialTime?: number;
   /** False while the player is out of view (another tab) — playback pauses. */
@@ -39,12 +43,128 @@ function HighlightBox({ style, color, box }: { style: HighlightStyle; color: str
   return <span className={base} style={{ ...pos, background: color, mixBlendMode: 'multiply' }} />;
 }
 
+const GLIDE_MS = 120;
+
+interface OverlayHandle {
+  update: (t: number) => void;
+}
+
+const pct = (r: Rect, size: [number, number]) => {
+  const b = rectToPercent(r, size);
+  return { left: `${b.left}%`, top: `${b.top}%`, width: `${b.width}%`, height: `${b.height}%` };
+};
+
+/**
+ * Word and cursor highlighting. Positions are written straight to the DOM on every animation
+ * frame (like the scrubber), so a moving cursor never re-renders React. The word box glides to
+ * the next word on the same line (CSS transition) and cuts to a new line with a quick fade, like
+ * the video. Mirrors word_marks / cursor_marks in the compositor.
+ */
+function WordOverlay({
+  ref,
+  segment,
+  mode,
+  pageSize,
+  style,
+  color,
+  tint,
+}: {
+  ref: Ref<OverlayHandle>;
+  segment: TimelineSegment;
+  mode: 'word' | 'cursor';
+  pageSize: [number, number];
+  style: HighlightStyle;
+  color: string;
+  tint: boolean;
+}) {
+  const wordRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const lineRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const caretRef = useRef<HTMLSpanElement>(null);
+  const shown = useRef<{ key: string; rect?: Rect }>({ key: '' });
+  const lastT = useRef(segment.start);
+  const segRef = useRef(segment);
+  segRef.current = segment;
+
+  const update = useCallback(
+    (t: number) => {
+      lastT.current = t;
+      const seg = segRef.current;
+      const words = seg.words;
+      if (!words?.length) return;
+      if (mode === 'word') {
+        const k = wordIndexAt(words, t);
+        const key = `${seg.i}:${k}`;
+        if (key === shown.current.key) return;
+        const rects = words[k].rects;
+        const prev = shown.current.rect;
+        const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        const glide = !reduce && !!prev && rects.length === 1 && sameLine(prev, rects[0]);
+        wordRefs.current.forEach((el, i) => {
+          if (!el) return;
+          const r = rects[i];
+          el.style.display = r ? '' : 'none';
+          if (!r) return;
+          el.style.transition = glide ? `left ${GLIDE_MS}ms ease-out, top ${GLIDE_MS}ms ease-out, width ${GLIDE_MS}ms ease-out, height ${GLIDE_MS}ms ease-out` : 'none';
+          Object.assign(el.style, pct(r, pageSize));
+          if (!glide && !reduce) el.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 90, easing: 'ease-out' });
+        });
+        shown.current = { key, rect: rects[rects.length - 1] };
+        return;
+      }
+      const c = cursorAt(seg, t);
+      if (!c) return;
+      seg.rects.forEach((ln, i) => {
+        const el = lineRefs.current[i];
+        if (!el) return;
+        const x1 = i < c.line ? ln[2] : i === c.line ? c.x : ln[0];
+        el.style.display = x1 > ln[0] ? '' : 'none';
+        if (x1 > ln[0]) Object.assign(el.style, pct([ln[0], ln[1], x1, ln[3]], pageSize));
+      });
+      const caret = caretRef.current;
+      if (caret) {
+        const ln = seg.rects[c.line];
+        caret.style.display = t <= seg.end ? '' : 'none';
+        const b = rectToPercent([c.x, ln[1], c.x, ln[3]], pageSize);
+        Object.assign(caret.style, { left: `${b.left + b.width / 2}%`, top: `${b.top}%`, height: `${b.height}%` });
+      }
+    },
+    [mode, pageSize],
+  );
+  useImperativeHandle(ref, () => ({ update }), [update]);
+  // New segment rendered (or paused / seeked): draw its state now rather than on the next frame.
+  useLayoutEffect(() => update(lastT.current), [segment, update]);
+
+  const fill = highlightFill(style, color);
+  const base = 'pointer-events-none absolute rounded-[2px]';
+  return (
+    <>
+      {tint && segment.rects.map((r, i) => <span key={`t${i}`} className={base} style={{ ...pct(r, pageSize), ...fill, opacity: 0.3 }} />)}
+      {mode === 'word'
+        ? [0, 1].map((i) => <span key={`w${i}`} ref={(el) => void (wordRefs.current[i] = el)} className={base} style={{ ...fill, display: 'none' }} />)
+        : segment.rects.map((_, i) => <span key={`l${segment.i}-${i}`} ref={(el) => void (lineRefs.current[i] = el)} className={base} style={{ ...fill, display: 'none' }} />)}
+      {mode === 'cursor' && (
+        <span ref={caretRef} className="pointer-events-none absolute w-[2px] -translate-x-1/2 rounded-full" style={{ background: color, filter: 'brightness(0.55)', display: 'none' }} />
+      )}
+    </>
+  );
+}
+
 /**
  * Read-along preview: streams audiobook.m4a, shows the PDF page being narrated and draws the
  * current segment's rects (PDF points → % of the page box). The playhead is sampled every
  * animation frame; a binary search finds the segment, and React only re-renders when it changes.
  */
-export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle, highlightColor, initialTime, active = true }: ReadAlongPlayerProps) {
+export function ReadAlongPlayer({
+  projectId,
+  timeline,
+  audioSrc,
+  highlightStyle,
+  highlightColor,
+  highlightMode = 'sentence',
+  sentenceTint = true,
+  initialTime,
+  active = true,
+}: ReadAlongPlayerProps) {
   const segments = timeline.segments;
   const chapters = timeline.chapters;
   const duration = timeline.duration || segments.at(-1)?.end || 0;
@@ -54,6 +174,7 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
   const fillRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
+  const overlayRef = useRef<OverlayHandle>(null);
   const idxRef = useRef(-1);
   const draggingRef = useRef(false);
   /** Pending start position; applied once the audio can seek, then cleared. */
@@ -77,6 +198,7 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
         idxRef.current = i;
         setIdx(i);
       }
+      overlayRef.current?.update(t);
     },
     [duration, segments],
   );
@@ -182,7 +304,9 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
   // Page shown = page of the segment being read (or of the first segment before playback).
   const page = current?.page ?? segments[0]?.page ?? 1;
   const [pw, ph] = pageSizeOf(timeline, page);
-  const boxes = current && current.page === page ? current.rects.map((r) => rectToPercent(r, [pw, ph])) : [];
+  const wordMode = (highlightMode === 'word' || highlightMode === 'cursor') && !!current?.words?.length ? highlightMode : undefined;
+  const boxes = current && current.page === page && !wordMode ? current.rects.map((r) => rectToPercent(r, [pw, ph])) : [];
+  const pageSize = useMemo<[number, number]>(() => [pw, ph], [pw, ph]);
   const chapterIdx = current ? chapters.findIndex((c) => c.index === current.chapterIndex) : 0;
   const chapter = chapters[Math.max(0, chapterIdx)];
 
@@ -275,6 +399,18 @@ export function ReadAlongPlayer({ projectId, timeline, audioSrc, highlightStyle,
             {boxes.map((b, i) => (
               <HighlightBox key={i} box={b} style={highlightStyle} color={highlightColor} />
             ))}
+            {wordMode && current && (
+              <WordOverlay
+                key={`words-${page}`}
+                ref={overlayRef}
+                segment={current}
+                mode={wordMode}
+                pageSize={pageSize}
+                style={highlightStyle}
+                color={highlightColor}
+                tint={sentenceTint}
+              />
+            )}
           </div>
           <span className="absolute top-3 left-3 rounded-full bg-background/80 px-2.5 py-1 text-[11px] font-medium text-foreground/80 tabular shadow-sm backdrop-blur">
             Page {page}

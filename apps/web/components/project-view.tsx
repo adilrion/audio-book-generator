@@ -372,6 +372,8 @@ export function ProjectView({ id, initialTime, initialTab }: { id: string; initi
                   audioSrc={outputUrl(p.id, 'audiobook.m4a', { inline: true, v: preview.m4a?.size })}
                   highlightStyle={p.settings.video.highlightStyle}
                   highlightColor={p.settings.video.highlightColor}
+                  highlightMode={p.settings.video.highlightMode}
+                  sentenceTint={p.settings.video.sentenceTint}
                   initialTime={initialTime}
                   active={current === 'listen'}
                 />

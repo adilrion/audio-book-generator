@@ -18,6 +18,9 @@ EDGE = 0.04               # margin (fraction of visible height) kept between the
 HL_FADE_IN = 0.12
 HL_HOLD = 0.80            # keep highlight this long into a pause before fading
 HL_FADE_OUT = 0.30
+TEXT_PAD = 0.035          # "text" page fit: margin each side of the text column, fraction of its width
+GLIDE = 0.12              # seconds for the word highlight to glide to the next word on the same line
+GLIDE_FADE = 0.08         # cross-fade when the next word is on another line
 
 
 def smoothstep(u: float) -> float:
@@ -34,27 +37,67 @@ def base_scale(pw: float, ph: float, W: int, H: int, animation: str) -> float:
     return fit
 
 
+def content_box(W: int, H: int, style: dict) -> tuple[int, int, int, int]:
+    """(x, y, w, h) of the picture inside the frame border. The border never covers the page."""
+    if style.get("frameStyle", "none") in ("none", None):
+        return 0, 0, W, H
+    b = max(1, int(round(float(style.get("frameWidth", 24)) * min(W, H) / 1080.0)))
+    b = min(b, max(1, min(W, H) // 5))
+    return b, b, W - 2 * b, H - 2 * b
+
+
+def text_extents(segments: list[dict]) -> tuple[float, dict[int, tuple[float, float]]]:
+    """Width of the widest printed text on any page, and each page's (x0, x1) text span, in points."""
+    span: dict[int, tuple[float, float]] = {}
+    for s in segments:
+        for r in s["rects"]:
+            x0, x1 = span.get(s["page"], (r[0], r[2]))
+            span[s["page"]] = (min(x0, r[0]), max(x1, r[2]))
+    return max((b - a for a, b in span.values()), default=0.0), span
+
+
+def fit_scale(pw: float, ph: float, W: int, H: int, animation: str, fit: str = "auto", text_w: float = 0.0) -> float:
+    """Frame pixels per PDF point for a page fit: `width` spans the frame, `text` spans it with the text."""
+    if fit == "width":
+        return W / pw
+    if fit == "text" and text_w > 0:
+        return max(W / pw, W / (text_w * (1 + 2 * TEXT_PAD)))
+    return base_scale(pw, ph, W, H, animation)
+
+
+def center_x(pw: float, visible_w: float, fit: str, span: tuple[float, float] | None, text_w: float) -> float:
+    """Horizontal camera centre on a page. `text` fit centres the text column (left margins differ
+    between left and right pages), keeping the page edge-to-edge."""
+    if fit != "text" or span is None or visible_w >= pw:
+        return pw / 2
+    x0, x1 = span
+    # A page with only short lines (a chapter's last page, a centred heading) is centred on itself.
+    cx = (x0 + x1) / 2 if x1 - x0 < 0.6 * text_w else x0 + text_w / 2
+    return min(max(cx, visible_w / 2), pw - visible_w / 2)
+
+
 def union_y(rects: list[list[float]]) -> tuple[float, float]:
     return min(r[1] for r in rects), max(r[3] for r in rects)
 
 
-def clamp_center(cy: float, ph: float, visible_h: float) -> float:
-    """Keep the camera over the page; if the whole page fits, center it."""
-    pad = 0.04 * ph
+def clamp_center(cy: float, ph: float, visible_h: float, pad: float = 0.04) -> float:
+    """Keep the camera over the page (`pad` = how far past its top/bottom edge, as a fraction of
+    its height); if the whole page fits, center it."""
+    pad = pad * ph
     if ph + 2 * pad <= visible_h:
         return ph / 2
     lo, hi = visible_h / 2 - pad, ph - visible_h / 2 + pad
     return min(max(cy, lo), hi)
 
 
-def target_y(rects: list[list[float]], ph: float, visible_h: float) -> float:
+def target_y(rects: list[list[float]], ph: float, visible_h: float, pad: float = 0.04) -> float:
     if not rects:
         return ph / 2
     y0, y1 = union_y(rects)
     if y1 - y0 < 0.6 * visible_h:
-        return clamp_center((y0 + y1) / 2, ph, visible_h)
+        return clamp_center((y0 + y1) / 2, ph, visible_h, pad)
     # Tall block (long sentence / paragraph): put its top at ~30% of the frame.
-    return clamp_center(y0 - 0.3 * visible_h + visible_h / 2, ph, visible_h)
+    return clamp_center(y0 - 0.3 * visible_h + visible_h / 2, ph, visible_h, pad)
 
 
 @dataclass
@@ -136,7 +179,7 @@ def _pan_fraction(y_from: float, y_to: float, lo: float, hi: float, leaving: boo
     return 0.0 if p <= 0 else _inv_smoothstep(min(1.0, p))
 
 
-def build_camera_path(segments: list[dict], ph: float, visible_h: float, t_start: float, follow: bool) -> CameraPath:
+def build_camera_path(segments: list[dict], ph: float, visible_h: float, t_start: float, follow: bool, pad: float = 0.04) -> CameraPath:
     """Piecewise eased vertical pan: only move when the next sentence leaves the dead zone.
 
     A pan normally starts CAM_LEAD before the sentence. When that would still show the sentence
@@ -149,12 +192,15 @@ def build_camera_path(segments: list[dict], ph: float, visible_h: float, t_start
         path.keys.append(Keyframe(t_start, cy, cy, 0.0))
         return path
     parts = reading_parts(segments)
-    cur = target_y(parts[0][2], ph, visible_h)
+    cur = target_y(parts[0][2], ph, visible_h, pad)
     path.keys.append(Keyframe(t_start, cur, cur, 0.0))
     prev_end, prev_rects = parts[0][1], parts[0][2]
     for start, end, rects in parts[1:]:
-        tgt = target_y(rects, ph, visible_h)
-        if abs(tgt - cur) > DEAD_ZONE * visible_h:
+        tgt = target_y(rects, ph, visible_h, pad)
+        lo, hi = _window(rects, visible_h)
+        # Pan when the target leaves the dead zone — or when the words would not be on screen
+        # (a target clamped at the page edge can sit inside the dead zone and still be cut off).
+        if abs(tgt - cur) > DEAD_ZONE * visible_h or (not lo - 0.5 <= cur <= hi + 0.5 and lo <= tgt <= hi):
             earliest = path.keys[-1].t0 + 0.05
             t0, dur = max(start - CAM_LEAD, earliest), CAM_MOVE
             y_from = path.keys[-1].y_to
@@ -218,6 +264,99 @@ def highlight_state(segments: list[dict], seg_from: int, seg_to: int, t: float) 
     if a < 1.0 and k > 0 and t - s["start"] < HL_FADE_IN:
         prev, pa = idx - 1, 1.0 - a
     return idx, a, prev, pa
+
+
+def _fade_out(seg: dict, t: float) -> float:
+    hold_end = seg["end"] + HL_HOLD
+    return 1.0 if t <= hold_end else max(0.0, 1.0 - (t - hold_end) / HL_FADE_OUT)
+
+
+def word_index(seg: dict, t: float) -> int:
+    """The word being spoken at time t (the first one before the sentence starts)."""
+    starts = seg.get("_ws")
+    if starts is None:
+        starts = seg["_ws"] = [w["start"] for w in seg["words"]]
+    return max(0, bisect_right(starts, t) - 1)
+
+
+def same_line(a: list[float], b: list[float]) -> bool:
+    return abs((a[1] + a[3]) / 2 - (b[1] + b[3]) / 2) < 0.5 * max(a[3] - a[1], b[3] - b[1], 1e-6)
+
+
+def word_marks(segments: list[dict], seg_from: int, idx: int, t: float) -> list[tuple[list, float]]:
+    """Word highlight at time t: [(rects, alpha)]. The box glides from the previous word when both
+    are on one line (also across a sentence break), and cross-fades when reading moves to a new line."""
+    seg = segments[idx]
+    words = seg.get("words") or []
+    if not words:
+        return []
+    k = word_index(seg, t)
+    cur = words[k]["rects"]
+    since = t - words[k]["start"]
+    prev = None
+    if k > 0:
+        prev = words[k - 1]["rects"]
+    elif idx > seg_from and segments[idx - 1].get("words") and seg["start"] - segments[idx - 1]["end"] <= HL_HOLD:
+        prev = segments[idx - 1]["words"][-1]["rects"]
+    out_a = _fade_out(seg, t)
+    if prev is None:
+        a = min(1.0, max(0.0, since) / HL_FADE_IN) if HL_FADE_IN > 0 else 1.0
+        return [(cur, a * out_a)]
+    if since >= GLIDE or since < 0:
+        return [(cur, out_a)]
+    if len(prev) == 1 and len(cur) == 1 and same_line(prev[0], cur[0]):
+        u = smoothstep(since / GLIDE)
+        return [([[p + (c - p) * u for p, c in zip(prev[0], cur[0])]], out_a)]
+    v = min(1.0, since / GLIDE_FADE)
+    return [(prev, (1.0 - v) * out_a), (cur, v * out_a)]
+
+
+def _line_of(lines: list[list[float]], r: list[float]) -> int:
+    """Index of the printed line (a sentence rect) that holds word rect r."""
+    cy = (r[1] + r[3]) / 2
+    best, dist = 0, float("inf")
+    for i, ln in enumerate(lines):
+        if r[2] < ln[0] - 1 or r[0] > ln[2] + 1:
+            continue
+        d = abs((ln[1] + ln[3]) / 2 - cy)
+        if d < dist:
+            best, dist = i, d
+    return best
+
+
+def cursor_position(seg: dict, t: float) -> tuple[int, float]:
+    """(line, x) of the reading cursor at time t: it sweeps each word (and the space after it) as
+    the word is spoken, so it moves continuously along a line. `line` indexes seg["rects"]."""
+    words, lines = seg["words"], seg["rects"]
+    k = word_index(seg, t)
+    w = words[k]
+    rs = [list(r) for r in w["rects"]]
+    nxt = words[k + 1]["rects"][0] if k + 1 < len(words) else None
+    if nxt is not None and same_line(rs[-1], nxt) and nxt[0] > rs[-1][2]:
+        rs[-1][2] = nxt[0]
+    dur = w["end"] - w["start"]
+    u = 1.0 if dur <= 0 else min(1.0, max(0.0, (t - w["start"]) / dur))
+    widths = [max(1e-6, r[2] - r[0]) for r in rs]
+    pos = u * sum(widths)
+    for r, wd in zip(rs, widths):
+        if pos <= wd or r is rs[-1]:
+            return _line_of(lines, r), r[0] + min(pos, wd)
+        pos -= wd
+    return len(lines) - 1, lines[-1][2]
+
+
+def cursor_marks(seg: dict, t: float) -> tuple[list[list[float]], list[float] | None, float]:
+    """(read rects, caret rect, alpha): the part of the sentence read so far, as line pieces."""
+    if not seg.get("words") or not seg["rects"]:
+        return [], None, 0.0
+    line, x = cursor_position(seg, t)
+    lines = seg["rects"]
+    ln = lines[line]
+    x = min(max(x, ln[0]), ln[2])
+    read = [list(r) for r in lines[:line]] + ([[ln[0], ln[1], x, ln[3]]] if x > ln[0] else [])
+    a = _fade_out(seg, t) * (min(1.0, max(0.0, t - seg["start"]) / HL_FADE_IN) if HL_FADE_IN > 0 else 1.0)
+    caret = [x, ln[1], x, ln[3]] if t <= seg["end"] else None
+    return read, caret, a
 
 
 def frame_range(t0: float, t1: float, fps: int) -> tuple[int, int]:

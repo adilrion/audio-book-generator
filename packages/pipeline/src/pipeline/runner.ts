@@ -36,6 +36,7 @@ import {
   type Stage,
   type StepRecord,
   type Timeline,
+  type VideoSettings,
 } from '@app/types';
 import { masterAudio, muxFinal, validateOutput } from '../audio/ffmpeg';
 import { LLMHelper } from '../llm/helper';
@@ -95,6 +96,27 @@ export interface PipelineResult {
 }
 
 const chapterLabel = (c: Chapter) => `Chapter ${c.index + 1}`;
+
+/**
+ * What the compositor needs to draw a chapter. The style is part of every rendered segment's
+ * cache key, so options added after v1 are only included when they differ from the defaults:
+ * rendered chapters of existing projects stay valid.
+ */
+export function renderStyle(v: VideoSettings): Record<string, unknown> {
+  const style: Record<string, unknown> = {
+    animation: v.animation,
+    subtleZoom: v.subtleZoom,
+    highlightStyle: v.highlightStyle,
+    highlightColor: v.highlightColor,
+    theme: v.theme,
+    showProgress: v.showProgress,
+    showChapterTitle: v.showChapterTitle,
+  };
+  if (v.highlightMode === 'word' || v.highlightMode === 'cursor') Object.assign(style, { highlightMode: v.highlightMode, sentenceTint: v.sentenceTint });
+  if (v.pageFit !== 'auto') style.pageFit = v.pageFit;
+  if (v.frameStyle !== 'none') Object.assign(style, { frameStyle: v.frameStyle, frameColor: v.frameColor, frameWidth: v.frameWidth, frameRadius: v.frameRadius });
+  return style;
+}
 
 export class PipelineRunner {
   private readonly paths: CachePaths;
@@ -736,18 +758,12 @@ export class PipelineRunner {
     const v = job.settings.video;
     const fps = v.fps;
     return timeline.chapters.map((tc, i) => {
-      const segments = timeline.segments.filter((sg) => sg.chapterIndex === tc.index).map((sg) => ({ start: sg.start, end: sg.end, page: sg.page, rects: sg.rects }));
+      const segments = timeline.segments
+        .filter((sg) => sg.chapterIndex === tc.index)
+        .map((sg) => ({ start: sg.start, end: sg.end, page: sg.page, rects: sg.rects, ...(sg.words ? { words: sg.words.map((w) => ({ start: w.start, end: w.end, rects: w.rects })) } : {}) }));
       const frameStart = Math.round(tc.start * fps);
       const frameEnd = Math.round(tc.end * fps);
-      const style = {
-        animation: v.animation,
-        subtleZoom: v.subtleZoom,
-        highlightStyle: v.highlightStyle,
-        highlightColor: v.highlightColor,
-        theme: v.theme,
-        showProgress: v.showProgress,
-        showChapterTitle: v.showChapterTitle,
-      };
+      const style = renderStyle(v);
       const encoder = { codec: this.cfg.VIDEO_ENCODER, bitrate: this.cfg.VIDEO_BITRATE, crf: this.cfg.VIDEO_CRF, ffmpeg: this.cfg.FFMPEG_BIN };
       const key = hashKey(RENDER_VERSION, job.pdfHash, audios[i].cacheKey, v.width, v.height, fps, style, encoder, segments, tc.title, frameStart, frameEnd, v.showProgress ? timeline.duration : 0);
       const pages: Record<string, { w: number; h: number }> = {};

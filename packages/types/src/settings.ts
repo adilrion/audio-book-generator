@@ -1,9 +1,21 @@
 export type OutputMode = 'audiobook_video' | 'audiobook_only';
 export type AspectRatio = '16:9' | '9:16' | '1:1';
 export type AnimationStyle = 'follow' | 'kenburns' | 'static';
-export type HighlightMode = 'sentence' | 'paragraph';
+/**
+ * What the highlight follows: the whole sentence or paragraph being read, the word being spoken
+ * (the box glides from word to word), or a reading cursor that sweeps through the sentence.
+ */
+export type HighlightMode = 'sentence' | 'paragraph' | 'word' | 'cursor';
 export type HighlightStyle = 'marker' | 'underline' | 'box';
 export type VideoTheme = 'paper' | 'light' | 'dark';
+/**
+ * How large the page is drawn: `auto` keeps a margin around the page (the camera style decides
+ * the zoom), `width` makes the page span the whole frame width, `text` crops the page's own
+ * margins so the printed text spans the frame width.
+ */
+export type PageFit = 'auto' | 'width' | 'text';
+/** Border drawn around the video picture. The picture is inset so the border never covers text. */
+export type FrameStyle = 'none' | 'solid' | 'double' | 'dashed';
 export type LanguageCode = 'en' | 'bn';
 export type TTSEngineName = 'kokoro' | 'piper' | 'say';
 export type OcrMode = 'auto' | 'off' | 'force';
@@ -68,7 +80,17 @@ export interface VideoSettings {
   highlightStyle: HighlightStyle;
   /** Hex color, e.g. #FFD54F */
   highlightColor: string;
+  /** Word and cursor highlighting: also tint the whole sentence faintly, so the eye keeps its place. */
+  sentenceTint: boolean;
   theme: VideoTheme;
+  pageFit: PageFit;
+  frameStyle: FrameStyle;
+  /** Hex color of the frame border, e.g. #1F2937 */
+  frameColor: string;
+  /** Border thickness in pixels at 1080p (scaled with the video size). */
+  frameWidth: number;
+  /** Corner radius of the picture inside the border, in pixels at 1080p. 0 = square corners. */
+  frameRadius: number;
   showProgress: boolean;
   showChapterTitle: boolean;
   /** Add a soft (toggleable) subtitle track to the MP4. */
@@ -106,7 +128,13 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
     highlightMode: 'sentence',
     highlightStyle: 'marker',
     highlightColor: '#FFD54F',
+    sentenceTint: true,
     theme: 'paper',
+    pageFit: 'auto',
+    frameStyle: 'none',
+    frameColor: '#1F2937',
+    frameWidth: 24,
+    frameRadius: 0,
     showProgress: true,
     showChapterTitle: true,
     embedSubtitles: true,

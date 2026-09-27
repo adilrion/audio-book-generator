@@ -53,9 +53,19 @@ Options for create:
   --aspect 16:9|9:16|1:1    Video format (default 16:9)
   --fps <n>                 Frames per second (default 30)
   --animation follow|kenburns|static
-  --highlight sentence|paragraph
+  --highlight sentence|paragraph|word|cursor
+                            word = the spoken word, gliding word to word; cursor = a reading cursor
   --highlight-style marker|underline|box
+  --no-sentence-tint        Word/cursor highlight without the faint sentence tint
+  --highlight-color <#hex>  Highlight colour (default #FFD54F)
   --theme paper|light|dark
+  --page-fit auto|width|text
+                            width = page edge to edge, text = crop page margins so the text fills the width
+  --frame none|solid|double|dashed
+                            Border around the video (the picture is inset inside it)
+  --frame-color <#hex>      Border colour (default #1F2937)
+  --frame-width <px>        Border thickness at 1080p (default 24)
+  --frame-radius <px>       Rounded inner corners at 1080p (default 0)
   --chapters <a-b>          Only chapters a..b (1-based), e.g. 1-2
   --skip-front-matter       Skip content before the first chapter
   --keep-back-matter        Also narrate trailing licence/index/about-the-author chapters
@@ -127,7 +137,14 @@ async function cmdCreate(args: string[]) {
       animation: { type: 'string' },
       highlight: { type: 'string' },
       'highlight-style': { type: 'string' },
+      'highlight-color': { type: 'string' },
+      'no-sentence-tint': { type: 'boolean' },
       theme: { type: 'string' },
+      'page-fit': { type: 'string' },
+      frame: { type: 'string' },
+      'frame-color': { type: 'string' },
+      'frame-width': { type: 'string' },
+      'frame-radius': { type: 'string' },
       chapters: { type: 'string' },
       'skip-front-matter': { type: 'boolean' },
       'keep-back-matter': { type: 'boolean' },
@@ -146,6 +163,24 @@ async function cmdCreate(args: string[]) {
 
   const modes = ['silent', 'quiet', 'balanced', 'fast'];
   if (values.power && !modes.includes(values.power)) throw new Error(`--power must be one of: ${modes.join(', ')}`);
+  const oneOf = (flag: string, value: string | undefined, allowed: string[]) => {
+    if (value !== undefined && !allowed.includes(value)) throw new Error(`--${flag} must be one of: ${allowed.join(', ')}`);
+  };
+  oneOf('highlight', values.highlight, ['sentence', 'paragraph', 'word', 'cursor']);
+  oneOf('highlight-style', values['highlight-style'], ['marker', 'underline', 'box']);
+  oneOf('page-fit', values['page-fit'], ['auto', 'width', 'text']);
+  oneOf('frame', values.frame, ['none', 'solid', 'double', 'dashed']);
+  for (const flag of ['highlight-color', 'frame-color'] as const)
+    if (values[flag] !== undefined && !/^#[0-9a-fA-F]{6}$/.test(values[flag]!)) throw new Error(`--${flag} must be a colour like #FFD54F`);
+  const px = (flag: 'frame-width' | 'frame-radius', min: number, max: number) => {
+    const v = values[flag];
+    if (v === undefined) return undefined;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`--${flag} must be a whole number of pixels from ${min} to ${max}`);
+    return n;
+  };
+  const frameWidth = px('frame-width', 2, 120);
+  const frameRadius = px('frame-radius', 0, 200);
   const cfg = values.power ? loadConfig({ PERFORMANCE_MODE: values.power as 'balanced' }) : loadConfig();
   const log = createLogger('cli', values.verbose ? 'debug' : 'warn');
   const engine = (values.engine ?? cfg.TTS_ENGINE) as ProjectSettings['tts']['engine'];
@@ -168,7 +203,14 @@ async function cmdCreate(args: string[]) {
       ...(values.animation ? { animation: values.animation as 'follow' } : {}),
       ...(values.highlight ? { highlightMode: values.highlight as 'sentence' } : {}),
       ...(values['highlight-style'] ? { highlightStyle: values['highlight-style'] as 'marker' } : {}),
+      ...(values['highlight-color'] ? { highlightColor: values['highlight-color'].toUpperCase() } : {}),
+      ...(values['no-sentence-tint'] ? { sentenceTint: false } : {}),
       ...(values.theme ? { theme: values.theme as 'paper' } : {}),
+      ...(values['page-fit'] ? { pageFit: values['page-fit'] as 'auto' } : {}),
+      ...(values.frame ? { frameStyle: values.frame as 'none' } : {}),
+      ...(values['frame-color'] ? { frameColor: values['frame-color'].toUpperCase() } : {}),
+      ...(frameWidth !== undefined ? { frameWidth } : {}),
+      ...(frameRadius !== undefined ? { frameRadius } : {}),
     },
   };
   if (values.aspect && !ASPECT_SIZES[values.aspect as AspectRatio]) throw new Error(`Unsupported aspect ratio: ${values.aspect}`);

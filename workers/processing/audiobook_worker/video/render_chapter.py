@@ -41,8 +41,8 @@ def sweep_stale_temp(directory: str | os.PathLike, max_age: float = STALE_TMP_SE
             pass
 
 
-def page_render_scale(w: float, h: float, W: int, H: int, animation: str) -> float:
-    s = layout.base_scale(w, h, W, H, animation) * MAX_ZOOM
+def page_render_scale(w: float, h: float, W: int, H: int, animation: str, fit: str = "auto", text_w: float = 0.0) -> float:
+    s = layout.fit_scale(w, h, W, H, animation, fit, text_w) * MAX_ZOOM
     return round(s * 20) / 20  # quantize so neighbouring chapters share page images
 
 
@@ -50,8 +50,10 @@ def prepare_pages(params: dict, ctx=None) -> dict:
     """Ensure every page used by the segments is rendered. Returns compositor `pages` mapping."""
     if all("image" in v for v in params["pages"].values()):
         return params["pages"]
-    W, H = int(params["width"]), int(params["height"])
-    animation = params.get("style", {}).get("animation", "follow")
+    style = params.get("style", {})
+    _, _, W, H = layout.content_box(int(params["width"]), int(params["height"]), style)  # the picture inside the frame
+    animation, fit = style.get("animation", "follow"), style.get("pageFit", "auto")
+    text_w = layout.text_extents(params["segments"])[0] if fit == "text" else 0.0
     page_dir = Path(params["pageDir"])
     needed = sorted({int(s["page"]) for s in params["segments"]})
     out: dict[str, dict] = {}
@@ -60,7 +62,7 @@ def prepare_pages(params: dict, ctx=None) -> dict:
         for i, p in enumerate(needed):
             size = params["pages"][str(p)]
             w, h = float(size["w"]), float(size["h"])
-            scale = page_render_scale(w, h, W, H, animation)
+            scale = page_render_scale(w, h, W, H, animation, fit, text_w)
             img = page_dir / f"{scale:.2f}" / f"page-{p:04d}.png"
             if not img.exists():
                 scale = render_page(doc, p, scale, str(img))["scale"]

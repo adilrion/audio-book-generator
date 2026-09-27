@@ -82,6 +82,13 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Read-along video:** a camera that follows the narration with eased pans and a dead zone, a subtle
   zoom, a page cross-fade, marker/underline/box highlights, an optional progress bar and chapter title
   cards, 16:9, 9:16 or 1:1, encoded with the Apple VideoToolbox hardware encoder.
+- **Highlight by sentence, paragraph, word or cursor.** Word mode highlights the word being spoken
+  and glides smoothly from word to word; cursor mode sweeps a reading cursor through the sentence,
+  filling in what has been read. Both can keep a faint tint on the whole sentence.
+- **Full-width pages and a frame border.** Show the page with a margin, edge to edge (*Full
+  width*), or with its own margins cropped so the text fills the frame (*Fit text*). Add a solid,
+  double or dashed border in any colour, thickness and corner radius; the picture is inset inside
+  it, so the border never covers text.
 - **Resumable and cached.** Every chapter's audio and video is a content-addressed artifact. An
   interrupted 10-hour book resumes at the chapter where it stopped. Changing the video theme re-renders
   video only, and changing the voice never redoes PDF or LLM work.
@@ -520,8 +527,10 @@ audiobook and <kbd>/</kbd> in the library to search.
 - **New audiobook** (`/new`): drag and drop a PDF. The page shows its cover, title, author, page
   count, estimated word count and narration length, and warns about scanned PDFs. The settings
   are pre-filled with the server defaults: output (video or audio only), voice engine, voice,
-  language and speed, video format (16:9, 9:16, 1:1), camera animation, highlight unit, style and
-  colour, background theme, progress bar, chapter title, embedded subtitles, and the text options
+  language and speed, video format (16:9, 9:16, 1:1), camera animation, page size (comfortable,
+  full width, fit text), highlight unit (sentence, paragraph, word, cursor), style and colour,
+  sentence tint, background theme, frame border (style, colour, thickness, rounded corners),
+  progress bar, chapter title, embedded subtitles, and the text options
   (review chapters before narration (on by default in the UI), skip front matter, skip back matter,
   local AI, chapter range, OCR). A side panel shows a live preview of one video frame and the
   **Start processing** button.
@@ -537,7 +546,8 @@ audiobook and <kbd>/</kbd> in the library to search.
   action. Three tabs (`?tab=` in the address keeps the one you are on):
   - **Overview**: live progress per stage and per chapter, the downloads, the power mode while
     processing, and the detected chapters.
-  - **Read-along**: the PDF page with the spoken sentence highlighted, synced to the audio — it
+  - **Read-along**: the PDF page with the spoken sentence (or word, or reading cursor) highlighted,
+    synced to the audio — it
     works as soon as the narration is ready — and then the final video. `?t=1:23` opens it at that
     moment.
   - **Settings**: the same options as for a new book, with a preview and the list of stages a
@@ -585,9 +595,16 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 | `--aspect` | `16:9` \| `9:16` \| `1:1` (`16:9`) | 1920×1080, 1080×1920 or 1080×1080 |
 | `--fps <n>` | `$VIDEO_FPS` (30) | Frame rate |
 | `--animation` | `follow` \| `kenburns` \| `static` (`follow`) | Camera style (see [video styles](#how-to-add-another-video-style)) |
-| `--highlight` | `sentence` \| `paragraph` (`sentence`) | Highlight granularity |
+| `--highlight` | `sentence` \| `paragraph` \| `word` \| `cursor` (`sentence`) | Highlight granularity: `word` glides from word to word, `cursor` sweeps through the sentence |
 | `--highlight-style` | `marker` \| `underline` \| `box` (`marker`) | Highlight look |
+| `--highlight-color <#hex>` | `#FFD54F` | Highlight colour |
+| `--no-sentence-tint` | off | Word / cursor highlight without the faint tint on the whole sentence |
 | `--theme` | `paper` \| `light` \| `dark` (`paper`) | Background and title-card colors |
+| `--page-fit` | `auto` \| `width` \| `text` (`auto`) | `width`: page edge to edge; `text`: page margins cropped so the text fills the width. Both always follow the narration |
+| `--frame` | `none` \| `solid` \| `double` \| `dashed` (`none`) | Border around the video; the picture is inset inside it |
+| `--frame-color <#hex>` | `#1F2937` | Border colour |
+| `--frame-width <px>` | `24` | Border thickness at 1080p (scaled with the video size), 2–120 |
+| `--frame-radius <px>` | `0` | Rounded inner corners at 1080p, 0–200 |
 | `--chapters <a-b>` | e.g. `3` or `1-4` | Narrate only these chapters (1-based, as numbered after detection, including "Opening Pages") |
 | `--skip-front-matter` | off | Skip content before the first chapter (copyright page, table of contents, …) |
 | `--power <mode>` | `$PERFORMANCE_MODE` (balanced) | `silent` (efficiency cores), `quiet` (≈ 2 cores), `balanced` (≈ 4 cores), `fast`. Drops to `quiet` on battery unless `QUIET_ON_BATTERY=false`. |
@@ -598,7 +615,7 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 | `--force` | off | Ignore every cache and recompute everything |
 | `--verbose` | off | Developer logs and technical error details |
 
-Settings without a CLI flag (highlight colour, subtle zoom, progress bar, chapter title cards,
+Settings without a CLI flag (subtle zoom, progress bar, chapter title cards,
 embedded subtitles, pause lengths, loudness normalization, a custom resolution, language) keep
 their defaults in the CLI; change them through the web UI or the API.
 
@@ -763,8 +780,8 @@ Each stage's cache key is a hash of exactly the inputs that affect its output:
 
 | You change… | What is recomputed |
 |---|---|
-| Video **theme**, highlight style/colour, animation, subtle zoom, resolution/aspect, progress bar, chapter title cards, `VIDEO_ENCODER` / `VIDEO_BITRATE` / `VIDEO_CRF` | `VIDEO_CHAPTER_n` + `MUX` only |
-| **fps** or **highlight mode** (sentence ↔ paragraph) | `TIMELINE` + video + mux |
+| Video **theme**, highlight style/colour, sentence tint, animation, subtle zoom, page size, frame border, resolution/aspect, progress bar, chapter title cards, `VIDEO_ENCODER` / `VIDEO_BITRATE` / `VIDEO_CRF` | `VIDEO_CHAPTER_n` + `MUX` only |
+| **fps** or **highlight mode** (sentence, paragraph, word, cursor) | `TIMELINE` + video + mux |
 | **Voice**, engine, speed or pause lengths | `TTS_CHAPTER_n` (all chapters) + audio master + timeline + video + mux. **Extraction and LLM/analysis are reused.** |
 | Loudness normalization, `AUDIO_BITRATE`, `AUDIO_ENCODER` | `AUDIO_MERGE` + `MUX`. The picture is not re-rendered: the chapter segments are used if they are still on disk, otherwise the video track is stream-copied from the existing `audiobook.mp4`. |
 | Embedded subtitles on/off | `MUX` only (same picture reuse) |
@@ -1095,7 +1112,7 @@ timings**, because the highlight sync depends on them.
    `base_scale()` and, if the style moves, the camera path (see `build_camera_path()` for how `follow`
    pans with a dead zone).
 2. **Compositor** (`video/compositor.py` → `ChapterCompositor._run_state()`): add a branch that
-   returns the `(page, center_y, scale, highlights)` state for time `t`. Anything returned in that
+   returns the `(page, center_x, center_y, scale, highlights, marks)` state for time `t`. Anything returned in that
    tuple enables frame reuse automatically. If the style zooms beyond 7 %, raise `MAX_ZOOM` in
    `video/render_chapter.py` so pages are rasterized sharp enough.
 3. **Types and validation:** add the name to `AnimationStyle` (`packages/types/src/settings.ts`), the
@@ -1106,7 +1123,7 @@ timings**, because the highlight sync depends on them.
    `pnpm audiobook ./sample-book.pdf --animation <name> --chapters 1-2`. The style is part of the
    render cache key, so switching styles re-renders video only.
 
-New highlight looks go in `ChapterCompositor._draw_highlight()`, the `HighlightStyle` type and
+New highlight looks go in `ChapterCompositor._paint()`, the `HighlightStyle` type and
 schema, the CLI help, the web form, and the browser preview's CSS approximation
 (`apps/web/lib/highlight.ts`, `components/read-along-player.tsx`). New themes go in the
 compositor's `THEMES`, the `VideoTheme` type and schema, and `THEMES` in

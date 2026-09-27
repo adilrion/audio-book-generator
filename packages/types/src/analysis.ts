@@ -8,6 +8,12 @@ export interface PageRegion {
   chars: number;
 }
 
+/** A printed word and every rectangle it is printed in (two for a word hyphenated across lines or pages). */
+export interface WordBox {
+  t: string;
+  parts: { page: number; rect: Rect }[];
+}
+
 export interface Sentence {
   /** stable id: c{chapter}-p{paragraph}-s{sentence} */
   id: string;
@@ -18,6 +24,8 @@ export interface Sentence {
   /** What the TTS engine speaks. Equals `text` unless normalization/LLM repair changed it. */
   narration: string;
   regions: PageRegion[];
+  /** The printed words in reading order, for word and cursor highlighting. */
+  words?: WordBox[];
 }
 
 export type ParagraphKind = 'heading' | 'body';

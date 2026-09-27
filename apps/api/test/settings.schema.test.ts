@@ -31,6 +31,24 @@ describe('settingsSchema', () => {
     expect(issues({ tts: { speed: 2 }, video: { fps: 60 }, audio: { sentencePauseMs: 0, chapterPauseMs: 10_000 } })).toEqual([]);
   });
 
+  it('accepts word / cursor highlighting, page fit and the frame border', () => {
+    const video = { highlightMode: 'cursor', sentenceTint: false, pageFit: 'text', frameStyle: 'double', frameColor: '#1e3a8a', frameWidth: 2, frameRadius: 0 };
+    expect(settingsSchema.parse({ video })).toEqual({ video });
+    expect(issues({ video: { highlightMode: 'word', pageFit: 'width', frameStyle: 'dashed', frameWidth: 120, frameRadius: 200 } })).toEqual([]);
+  });
+
+  it.each([
+    [{ highlightMode: 'letter' }, 'video.highlightMode'],
+    [{ pageFit: 'cover' }, 'video.pageFit'],
+    [{ frameStyle: 'dotted' }, 'video.frameStyle'],
+    [{ frameColor: 'navy' }, 'video.frameColor'],
+    [{ frameWidth: 1 }, 'video.frameWidth'],
+    [{ frameWidth: 12.5 }, 'video.frameWidth'],
+    [{ frameRadius: -1 }, 'video.frameRadius'],
+  ])('rejects invalid video option %o', (video, path) => {
+    expect(issues({ video })).toEqual([path]);
+  });
+
   it('strips unknown keys instead of storing them', () => {
     expect(settingsSchema.parse({ foo: 1, video: { fps: 30, bar: true } })).toEqual({ video: { fps: 30 } });
   });

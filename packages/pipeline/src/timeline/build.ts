@@ -1,4 +1,5 @@
-import type { Analysis, ChapterAudio, HighlightMode, PageRegion, Sentence, Timeline, TimelineChapter, TimelineSegment } from '@app/types';
+import type { Analysis, ChapterAudio, HighlightMode, PageRegion, Rect, Sentence, SentenceTiming, Timeline, TimelineChapter, TimelineSegment, TimelineWord } from '@app/types';
+import { printedWordTimes } from './words';
 
 export const TIMELINE_VERSION = 'timeline-v1';
 
@@ -44,6 +45,36 @@ export function splitAcrossPages(regions: PageRegion[], start: number, end: numb
   });
 }
 
+/** Highlight modes that need per-word timings in the timeline. */
+export const usesWords = (mode: HighlightMode) => mode === 'word' || mode === 'cursor';
+
+/**
+ * A sentence's printed words, timed, grouped by page. A word hyphenated across two pages is
+ * split between them by printed width, like the camera splits a sentence at a column break.
+ */
+export function sentenceWordsByPage(sentence: Sentence, timing: Pick<SentenceTiming, 'start' | 'end' | 'words'>, offset: number): Map<number, TimelineWord[]> {
+  const byPage = new Map<number, TimelineWord[]>();
+  const words = (sentence.words ?? []).filter((w) => w.parts.length);
+  if (!words.length) return byPage;
+  const spoken = timing.words?.map((w) => ({ t: w.t, start: offset + w.start, end: offset + w.end }));
+  const times = printedWordTimes(words.map((w) => w.t), sentence.narration, offset + timing.start, offset + timing.end, spoken);
+  words.forEach((w, k) => {
+    const { start, end } = times[k];
+    const pages = [...new Set(w.parts.map((p) => p.page))];
+    const widths = pages.map((pg) => w.parts.filter((p) => p.page === pg).reduce((n, p) => n + Math.max(1, p.rect[2] - p.rect[0]), 0));
+    const total = widths.reduce((a, b) => a + b, 0);
+    let t = start;
+    pages.forEach((pg, i) => {
+      const d = ((end - start) * widths[i]) / total;
+      const list = byPage.get(pg) ?? [];
+      list.push({ start: round(t), end: round(i === pages.length - 1 ? end : t + d), rects: w.parts.filter((p) => p.page === pg).map((p) => [...p.rect] as Rect) });
+      byPage.set(pg, list);
+      t += d;
+    });
+  });
+  return byPage;
+}
+
 export function buildTimeline(
   analysis: Analysis,
   audios: ChapterAudio[],
@@ -70,12 +101,19 @@ export function buildTimeline(
       const ref = refs.get(t.id);
       if (!ref || t.end <= t.start) continue;
       const regions = ref.sentence.regions.length ? ref.sentence.regions : ref.paragraphRegions;
+      const words = usesWords(opts.highlightMode) ? sentenceWordsByPage(ref.sentence, t, off) : undefined;
       for (const part of splitAcrossPages(regions, off + t.start, off + t.end)) {
         const page = part.region.page;
         const rects =
           opts.highlightMode === 'paragraph'
             ? ref.paragraphRegions.find((r) => r.page === page)?.rects ?? part.region.rects
             : part.region.rects;
+        // With word timings the page turns exactly where the first word of the next page is spoken.
+        const pageWords = words?.get(page);
+        if (pageWords?.length) {
+          part.start = pageWords[0].start;
+          part.end = pageWords[pageWords.length - 1].end;
+        }
         segments.push({
           i: segments.length,
           sentenceId: t.id,
@@ -87,6 +125,7 @@ export function buildTimeline(
           text: ref.sentence.text,
           rects,
           pageChange: page !== prevPage,
+          ...(pageWords?.length ? { words: pageWords } : {}),
         });
         prevPage = page;
       }

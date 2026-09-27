@@ -1,4 +1,4 @@
-import type { PageRegion, Rect } from '@app/types';
+import type { PageRegion, Rect, WordBox } from '@app/types';
 import type { Token } from './model';
 
 /**
@@ -36,6 +36,11 @@ export function regionsFor(tokens: Token[]): PageRegion[] {
       rects: v.rects.map((r) => r.map((x) => Math.round(x * 100) / 100) as Rect),
       chars: Math.round(v.chars),
     }));
+}
+
+/** The printed words of a token range with their boxes (0.1 pt precision), for word-level highlighting. */
+export function wordBoxes(tokens: Token[]): WordBox[] {
+  return tokens.map((t) => ({ t: t.t, parts: t.parts.map((p) => ({ page: p.page, rect: p.b.map((x) => Math.round(x * 10) / 10) as Rect })) }));
 }
 
 export function mergeRegions(regions: PageRegion[]): PageRegion[] {

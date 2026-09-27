@@ -95,7 +95,11 @@ export function affectedStages(patch: SettingsPatch, next: ProjectSettings): Sta
   if (patch.audio?.normalize !== undefined) add(['AUDIO_MERGE', 'MUX']);
   if (patch.video?.fps !== undefined || patch.video?.highlightMode !== undefined) add(['TIMELINE', 'VIDEO', 'MUX']);
   const v = patch.video ?? {};
-  const renderKeys = Object.keys(v).filter((k) => !['fps', 'highlightMode', 'embedSubtitles'].includes(k));
+  // Options that only apply in some modes change nothing otherwise (mirrors renderStyle in the pipeline).
+  const inert = new Set(['fps', 'highlightMode', 'embedSubtitles']);
+  if (next.video.highlightMode !== 'word' && next.video.highlightMode !== 'cursor') inert.add('sentenceTint');
+  if (next.video.frameStyle === 'none') ['frameColor', 'frameWidth', 'frameRadius'].forEach((k) => inert.add(k));
+  const renderKeys = Object.keys(v).filter((k) => !inert.has(k));
   if (renderKeys.length) add(['VIDEO', 'MUX']);
   if (v.embedSubtitles !== undefined) add(['MUX']);
   if (patch.outputMode === 'audiobook_video') add(['VIDEO', 'MUX']);

@@ -4,15 +4,36 @@ import {
   ASPECT_SIZES,
   type AnimationStyle,
   type AspectRatio,
+  type FrameStyle,
   type HighlightMode,
   type HighlightStyle,
   type OcrMode,
+  type PageFit,
   type ProjectSettings,
   type TTSEngineName,
   type VideoTheme,
 } from '@app/types';
-import { Captions, Check, Crosshair, Film, Headphones, Info, LoaderCircle, type LucideIcon, Mic, Move, Palette, ScanText, Sparkles, Square, TriangleAlert } from 'lucide-react';
-import { type ReactNode, useEffect, useId, useState } from 'react';
+import {
+  Captions,
+  Check,
+  Crosshair,
+  Film,
+  Headphones,
+  Info,
+  LoaderCircle,
+  type LucideIcon,
+  Mic,
+  Move,
+  Palette,
+  RectangleHorizontal,
+  ScanText,
+  Sparkles,
+  Square,
+  StretchHorizontal,
+  TextSelect,
+  TriangleAlert,
+} from 'lucide-react';
+import { type CSSProperties, type ReactNode, useEffect, useId, useState } from 'react';
 import { CommandSnippet } from '@/components/copy-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +47,7 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useApi } from '@/hooks/use-api';
 import { api, type SystemConfig } from '@/lib/api';
-import { highlightStyleCss } from '@/lib/highlight';
+import { highlightStyleCss, tintStyleCss } from '@/lib/highlight';
 import { splitHint } from '@/lib/hint';
 import { cloneSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
@@ -46,6 +67,26 @@ const ANIMATIONS: { value: AnimationStyle; label: string; hint: string; icon: Lu
   { value: 'static', label: 'Static', hint: 'Whole page, no motion', icon: Square },
 ];
 
+const PAGE_FITS: { value: PageFit; label: string; hint: string; icon: LucideIcon }[] = [
+  { value: 'auto', label: 'Comfortable', hint: 'The page with a margin around it — the camera style sets the zoom.', icon: RectangleHorizontal },
+  { value: 'width', label: 'Full width', hint: 'The page fills the frame from edge to edge, with no background showing.', icon: StretchHorizontal },
+  { value: 'text', label: 'Fit text', hint: 'Crops the page’s own margins so the printed text fills the width — the largest, easiest-to-read text.', icon: TextSelect },
+];
+
+const HIGHLIGHT_MODES: { value: HighlightMode; label: string; hint: string }[] = [
+  { value: 'sentence', label: 'Sentence', hint: 'The sentence being read is highlighted.' },
+  { value: 'paragraph', label: 'Paragraph', hint: 'The whole paragraph being read is highlighted.' },
+  { value: 'word', label: 'Word', hint: 'The word being spoken is highlighted and glides smoothly from word to word.' },
+  { value: 'cursor', label: 'Cursor', hint: 'A reading cursor sweeps through the sentence as it is spoken, filling in the words read so far.' },
+];
+
+const FRAME_STYLES: { value: FrameStyle; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'solid', label: 'Solid' },
+  { value: 'double', label: 'Double' },
+  { value: 'dashed', label: 'Dashed' },
+];
+
 export const THEMES: { value: VideoTheme; label: string; bg: string; page: string; ink: string }[] = [
   { value: 'paper', label: 'Paper', bg: 'rgb(236 230 218)', page: '#ffffff', ink: 'rgb(40 38 34)' },
   { value: 'light', label: 'Light', bg: 'rgb(243 244 246)', page: '#ffffff', ink: 'rgb(17 24 39)' },
@@ -60,6 +101,17 @@ const COLORS: { value: string; label: string }[] = [
   { value: '#F48FB1', label: 'Rose' },
   { value: '#CE93D8', label: 'Lilac' },
   { value: '#FFAB91', label: 'Peach' },
+];
+
+const FRAME_COLORS: { value: string; label: string }[] = [
+  { value: '#1F2937', label: 'Charcoal' },
+  { value: '#000000', label: 'Black' },
+  { value: '#FFFFFF', label: 'White' },
+  { value: '#8B5E34', label: 'Walnut' },
+  { value: '#1E3A8A', label: 'Navy' },
+  { value: '#166534', label: 'Forest' },
+  { value: '#881337', label: 'Burgundy' },
+  { value: '#CA8A04', label: 'Gold' },
 ];
 
 const OCR_MODES: { value: OcrMode; label: string }[] = [
@@ -180,15 +232,109 @@ function CheckedMark() {
   );
 }
 
+/** Perceived lightness of `#RRGGBB` (0 dark … 1 light), to pick a readable check mark. */
+function lightness(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+}
+
+/** Preset colour swatches plus a custom colour picker. */
+function ColorSwatches({ id, label, colors, value, onChange }: { id: string; label: string; colors: { value: string; label: string }[]; value: string; onChange: (hex: string) => void }) {
+  const custom = !colors.some((c) => c.value === value.toUpperCase());
+  return (
+    <div className="flex flex-wrap items-center gap-2.5" role="radiogroup" aria-label={label}>
+      {colors.map((c) => {
+        const on = value.toUpperCase() === c.value;
+        return (
+          <button
+            key={c.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            aria-label={c.label}
+            title={c.label}
+            onClick={() => onChange(c.value)}
+            className={cn(
+              'grid size-8 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)] transition-transform outline-none hover:scale-110 focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
+              on && 'ring-2 ring-foreground ring-offset-2 ring-offset-card',
+            )}
+            style={{ background: c.value }}
+          >
+            {on && <Check className={cn('size-3.5', lightness(c.value) > 0.6 ? 'text-black/70' : 'text-white/90')} strokeWidth={3} aria-hidden />}
+          </button>
+        );
+      })}
+      <label
+        className={cn(
+          'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground',
+          custom && 'text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-card',
+        )}
+        htmlFor={id}
+      >
+        <span className="size-4 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)]" style={{ background: value }} aria-hidden />
+        Custom
+        <input id={id} type="color" className="absolute inset-0 cursor-pointer opacity-0" value={value} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+      </label>
+    </div>
+  );
+}
+
 // ─────────────────────────────── highlight preview ───────────────────────────────
 
-/** Live mock-up of one video frame: theme, format, highlight style/colour, chapter title and progress bar. */
+/** Frame border as CSS, in `cqmin` of the preview (the video scales the border with min(width, height)). */
+function frameLayers(v: ProjectSettings['video'], bg: string): { inset: string; picture: CSSProperties; overlay?: CSSProperties } | undefined {
+  if (v.frameStyle === 'none') return undefined;
+  const b = v.frameWidth / 10.8; // px at 1080p → % of the shorter side
+  const r = `${v.frameRadius / 10.8}cqmin`;
+  const inset = `${b}cqmin`;
+  if (v.frameStyle === 'solid') return { inset, picture: { borderRadius: r, boxShadow: `0 0 0 100cqmax ${v.frameColor}` } };
+  if (v.frameStyle === 'double') {
+    const line = `${b / 3}cqmin`;
+    return { inset, picture: { borderRadius: r, boxShadow: `0 0 0 ${line} ${v.frameColor}, 0 0 0 100cqmax ${bg}` }, overlay: { border: `${line} solid ${v.frameColor}` } };
+  }
+  return { inset, picture: { borderRadius: r, boxShadow: `0 0 0 100cqmax ${bg}` }, overlay: { border: `${inset} dashed ${v.frameColor}` } };
+}
+
+/** Live mock-up of one video frame: theme, format, page size, frame, highlight mode/style/colour, chapter title and progress bar. */
 export function LookPreview({ settings, className }: { settings: ProjectSettings; className?: string }) {
   const v = settings.video;
   const theme = THEMES.find((t) => t.value === v.theme) ?? THEMES[0];
   const hl = highlightStyleCss(v.highlightStyle, v.highlightColor);
-  const para = v.highlightMode === 'paragraph';
+  const tint = tintStyleCss(v.highlightStyle, v.highlightColor);
+  const mode = v.highlightMode;
   const { width, height } = ASPECT_SIZES[v.aspectRatio];
+  const frame = frameLayers(v, theme.bg);
+  // Page geometry inside the picture. The page is a size container: its text scales with it.
+  const fill = v.pageFit !== 'auto';
+  const pageTaller = (width * 3) / 2 > height; // a full-width 2:3 page is taller than the frame
+  const pageStyle: CSSProperties = fill
+    ? { left: 0, right: 0, aspectRatio: '2 / 3', ...(pageTaller ? { top: v.pageFit === 'text' ? '-14%' : '-8%' } : { top: '50%', transform: 'translateY(-50%)' }) }
+    : { top: '9%', bottom: '9%', left: '50%', aspectRatio: '2 / 3', transform: 'translateX(-50%)' };
+  const pad = v.pageFit === 'text' ? '2.5cqw' : '5.8cqw';
+  const sentence = (
+    <>
+      Steam engines{' '}
+      {mode === 'word' ? (
+        <span className="rounded-[1px]" style={hl}>
+          changed
+        </span>
+      ) : mode === 'cursor' ? (
+        <>
+          <span className="rounded-[1px]" style={hl}>
+            chan
+          </span>
+          <span className="relative">
+            <span className="absolute inset-y-[-0.1em] left-0 w-[0.12em] -translate-x-1/2 rounded-full" style={{ background: v.highlightColor, filter: 'brightness(0.55)' }} />
+            ged
+          </span>
+        </>
+      ) : (
+        'changed'
+      )}{' '}
+      how goods were made and moved.
+    </>
+  );
+  const wordish = mode === 'word' || mode === 'cursor';
   return (
     <div className={cn('mx-auto w-full', v.aspectRatio === '9:16' ? 'max-w-[200px]' : v.aspectRatio === '1:1' ? 'max-w-[280px]' : 'max-w-[360px]', className)}>
       <div
@@ -196,24 +342,30 @@ export function LookPreview({ settings, className }: { settings: ProjectSettings
         style={{ background: theme.bg, aspectRatio: `${width} / ${height}` }}
         aria-hidden
       >
-        <div className="absolute inset-y-[9%] left-1/2 flex aspect-[2/3] -translate-x-1/2 flex-col gap-[2.6cqh] rounded-[2px] bg-white p-[3.2cqh] shadow-md" style={{ color: theme.ink }}>
-          {v.showChapterTitle && <p className="font-serif text-[4.4cqh] leading-tight font-semibold">Chapter 1: The Beginning</p>}
-          <p className="font-serif text-[3.3cqh] leading-[1.5]">
-            <span style={para ? hl : undefined}>
-              The Industrial Revolution began in Britain.{' '}
-              <span className="rounded-[1px]" style={para ? undefined : hl}>
-                Steam engines changed how goods were made and moved.
-              </span>{' '}
-              Cities grew quickly around the new mills.
-            </span>
-          </p>
-          <p className="font-serif text-[3.3cqh] leading-[1.5] opacity-80">Within a few decades the new methods had spread across Europe and beyond.</p>
-        </div>
-        {v.showProgress && (
-          <div className="absolute inset-x-0 bottom-0 h-[3%] min-h-[3px]" style={{ background: v.theme === 'dark' ? 'rgb(255 255 255 / 0.15)' : 'rgb(0 0 0 / 0.1)' }}>
-            <div className="h-full w-[38%]" style={{ background: v.highlightColor }} />
+        <div className="absolute overflow-hidden" style={{ inset: frame?.inset ?? 0, borderRadius: frame?.picture.borderRadius }}>
+          <div className={cn('absolute bg-white [container-type:inline-size]', !fill && 'rounded-[2px] shadow-md')} style={{ ...pageStyle, color: theme.ink }}>
+            <div className="flex flex-col" style={{ padding: pad, gap: '4.7cqw' }}>
+              {v.showChapterTitle && <p className="font-serif text-[8cqw] leading-tight font-semibold">Chapter 1: The Beginning</p>}
+              <p className="font-serif text-[6cqw] leading-[1.5]">
+                <span style={mode === 'paragraph' ? hl : undefined}>
+                  The Industrial Revolution began in Britain.{' '}
+                  <span className="rounded-[1px]" style={mode === 'sentence' ? hl : wordish && v.sentenceTint ? tint : undefined}>
+                    {sentence}
+                  </span>{' '}
+                  Cities grew quickly around the new mills.
+                </span>
+              </p>
+              <p className="font-serif text-[6cqw] leading-[1.5] opacity-80">Within a few decades the new methods had spread across Europe and beyond.</p>
+            </div>
           </div>
-        )}
+          {v.showProgress && (
+            <div className="absolute inset-x-0 bottom-0 h-[3cqh] min-h-[3px]" style={{ background: v.theme === 'dark' ? 'rgb(255 255 255 / 0.15)' : 'rgb(0 0 0 / 0.1)' }}>
+              <div className="h-full w-[38%]" style={{ background: v.highlightColor }} />
+            </div>
+          )}
+        </div>
+        {frame && <div className="pointer-events-none absolute" style={{ inset: frame.inset, ...frame.picture }} />}
+        {frame?.overlay && <div className="pointer-events-none absolute inset-0" style={frame.overlay} />}
       </div>
     </div>
   );
@@ -360,7 +512,7 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
   const v = value.video;
   const t = value.text;
   const videoOn = value.outputMode === 'audiobook_video';
-  const ids = { lang: useId(), anim: useId(), ocr: useId(), from: useId(), to: useId(), color: useId() };
+  const ids = { lang: useId(), anim: useId(), ocr: useId(), from: useId(), to: useId(), color: useId(), frameColor: useId() };
   const range = t.chapterRange;
   const rangeError = range && (range.from < 1 || range.to < 1 || range.from > range.to) ? 'The first chapter must be 1 or higher and not after the last.' : undefined;
   const llmOff = config && !config.llm.enabled;
@@ -491,63 +643,66 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
               </RadioGroup>
             </Field>
 
-            <div className="grid gap-6 sm:grid-cols-2">
-              <Field label="Highlight">
-                <Segmented value={v.highlightMode} onValueChange={(m) => update((d) => void (d.video.highlightMode = m as HighlightMode))} aria-label="Highlight unit">
-                  <SegmentedItem value="sentence">Sentence</SegmentedItem>
-                  <SegmentedItem value="paragraph">Paragraph</SegmentedItem>
-                </Segmented>
-              </Field>
-              <Field label="Style">
-                <Segmented value={v.highlightStyle} onValueChange={(s) => update((d) => void (d.video.highlightStyle = s as HighlightStyle))} aria-label="Highlight style">
-                  <SegmentedItem value="marker">Marker</SegmentedItem>
-                  <SegmentedItem value="underline">Underline</SegmentedItem>
-                  <SegmentedItem value="box">Box</SegmentedItem>
-                </Segmented>
-              </Field>
-            </div>
+            <Field
+              label="Page size"
+              hint={
+                <>
+                  {PAGE_FITS.find((f) => f.value === v.pageFit)?.hint}
+                  {v.pageFit !== 'auto' && v.animation !== 'follow' ? ' The camera follows the narration, since the page is taller than the frame.' : ''}
+                </>
+              }
+            >
+              <RadioGroup aria-label="Page size" value={v.pageFit} onValueChange={(f) => update((d) => void (d.video.pageFit = f as PageFit))} className="grid gap-2 sm:grid-cols-3">
+                {PAGE_FITS.map((f) => (
+                  <RadioCard key={f.value} value={f.value} className="flex-row items-center gap-2.5 p-2.5">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground transition-colors group-data-[state=checked]:bg-foreground group-data-[state=checked]:text-background">
+                      <f.icon className="size-3.5" aria-hidden />
+                    </span>
+                    <span className="font-medium">{f.label}</span>
+                  </RadioCard>
+                ))}
+              </RadioGroup>
+            </Field>
+
+            <Field
+              label="Highlight"
+              hint={
+                <>
+                  {HIGHLIGHT_MODES.find((m) => m.value === v.highlightMode)?.hint}
+                  {v.highlightMode === 'word' || v.highlightMode === 'cursor' ? ' Sentence timing is exact; word timing is estimated within each sentence.' : ''}
+                </>
+              }
+            >
+              <Segmented value={v.highlightMode} onValueChange={(m) => update((d) => void (d.video.highlightMode = m as HighlightMode))} aria-label="Highlight unit">
+                {HIGHLIGHT_MODES.map((m) => (
+                  <SegmentedItem key={m.value} value={m.value}>
+                    {m.label}
+                  </SegmentedItem>
+                ))}
+              </Segmented>
+            </Field>
+
+            <Field label="Style">
+              <Segmented value={v.highlightStyle} onValueChange={(s) => update((d) => void (d.video.highlightStyle = s as HighlightStyle))} aria-label="Highlight style">
+                <SegmentedItem value="marker">Marker</SegmentedItem>
+                <SegmentedItem value="underline">Underline</SegmentedItem>
+                <SegmentedItem value="box">Box</SegmentedItem>
+              </Segmented>
+            </Field>
+
+            {(v.highlightMode === 'word' || v.highlightMode === 'cursor') && (
+              <ToggleList>
+                <ToggleRow
+                  label="Tint the whole sentence"
+                  description={`A faint highlight on the sentence keeps the reader’s place while the ${v.highlightMode === 'word' ? 'word highlight' : 'cursor'} moves.`}
+                  checked={v.sentenceTint}
+                  onCheckedChange={(c) => update((d) => void (d.video.sentenceTint = c))}
+                />
+              </ToggleList>
+            )}
 
             <Field label="Highlight colour" htmlFor={ids.color}>
-              <div className="flex flex-wrap items-center gap-2.5" role="radiogroup" aria-label="Highlight colour">
-                {COLORS.map((c) => {
-                  const on = v.highlightColor.toUpperCase() === c.value;
-                  return (
-                    <button
-                      key={c.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={on}
-                      aria-label={c.label}
-                      title={c.label}
-                      onClick={() => update((d) => void (d.video.highlightColor = c.value))}
-                      className={cn(
-                        'grid size-8 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)] transition-transform outline-none hover:scale-110 focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
-                        on && 'ring-2 ring-foreground ring-offset-2 ring-offset-card',
-                      )}
-                      style={{ background: c.value }}
-                    >
-                      {on && <Check className="size-3.5 text-black/70" strokeWidth={3} aria-hidden />}
-                    </button>
-                  );
-                })}
-                <label
-                  className={cn(
-                    'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground',
-                    !COLORS.some((c) => c.value === v.highlightColor.toUpperCase()) && 'text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-card',
-                  )}
-                  htmlFor={ids.color}
-                >
-                  <span className="size-4 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)]" style={{ background: v.highlightColor }} aria-hidden />
-                  Custom
-                  <input
-                    id={ids.color}
-                    type="color"
-                    className="absolute inset-0 cursor-pointer opacity-0"
-                    value={v.highlightColor}
-                    onChange={(e) => update((d) => void (d.video.highlightColor = e.target.value.toUpperCase()))}
-                  />
-                </label>
-              </div>
+              <ColorSwatches id={ids.color} label="Highlight colour" colors={COLORS} value={v.highlightColor} onChange={(c) => update((d) => void (d.video.highlightColor = c))} />
             </Field>
 
             <Field label="Background">
@@ -566,6 +721,45 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
                 ))}
               </RadioGroup>
             </Field>
+
+            <Field label="Frame border" hint={v.frameStyle === 'none' ? 'A border around the whole video, in your colour.' : 'The picture is inset inside the border, so it never covers the text.'}>
+              <Segmented value={v.frameStyle} onValueChange={(f) => update((d) => void (d.video.frameStyle = f as FrameStyle))} aria-label="Frame border style">
+                {FRAME_STYLES.map((f) => (
+                  <SegmentedItem key={f.value} value={f.value}>
+                    {f.label}
+                  </SegmentedItem>
+                ))}
+              </Segmented>
+            </Field>
+            {v.frameStyle !== 'none' && (
+              <div className="grid gap-6 sm:grid-cols-2">
+                <Field label="Border colour" htmlFor={ids.frameColor}>
+                  <ColorSwatches id={ids.frameColor} label="Border colour" colors={FRAME_COLORS} value={v.frameColor} onChange={(c) => update((d) => void (d.video.frameColor = c))} />
+                </Field>
+                <div className="grid content-start gap-5">
+                  <Field
+                    label={
+                      <>
+                        Thickness
+                        <span className="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium tabular">{v.frameWidth}px</span>
+                      </>
+                    }
+                  >
+                    <Slider min={2} max={80} step={1} value={[v.frameWidth]} onValueChange={([w]) => update((d) => void (d.video.frameWidth = w))} aria-label="Border thickness" />
+                  </Field>
+                  <Field
+                    label={
+                      <>
+                        Rounded corners
+                        <span className="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium tabular">{v.frameRadius ? `${v.frameRadius}px` : 'Square'}</span>
+                      </>
+                    }
+                  >
+                    <Slider min={0} max={64} step={1} value={[v.frameRadius]} onValueChange={([r]) => update((d) => void (d.video.frameRadius = r))} aria-label="Corner radius" />
+                  </Field>
+                </div>
+              </div>
+            )}
 
             <ToggleList>
               <ToggleRow

@@ -1,4 +1,4 @@
-import type { Rect, Timeline, TimelineChapter, TimelineSegment } from '@app/types';
+import type { Rect, Timeline, TimelineChapter, TimelineSegment, TimelineWord } from '@app/types';
 
 /**
  * Index of the segment being narrated at time `t`: the last segment whose start ≤ t.
@@ -88,4 +88,57 @@ export function hitTest(segments: readonly TimelineSegment[], indices: readonly 
     }
   }
   return -1;
+}
+
+/** Word being spoken at `t` within a segment (the first word before the segment starts). */
+export function wordIndexAt(words: readonly Pick<TimelineWord, 'start'>[], t: number): number {
+  return Math.max(0, segmentIndexAt(words, t));
+}
+
+/** Two rects on the same printed line (vertical centres closer than half a line height). */
+export function sameLine(a: Rect, b: Rect): boolean {
+  return Math.abs((a[1] + a[3]) / 2 - (b[1] + b[3]) / 2) < 0.5 * Math.max(a[3] - a[1], b[3] - b[1], 1e-6);
+}
+
+/** Index of the printed line (one of the segment's rects) that holds word rect `r`. */
+function lineOf(lines: readonly Rect[], r: Rect): number {
+  const cy = (r[1] + r[3]) / 2;
+  let best = 0;
+  let dist = Infinity;
+  lines.forEach((ln, i) => {
+    if (r[2] < ln[0] - 1 || r[0] > ln[2] + 1) return;
+    const d = Math.abs((ln[1] + ln[3]) / 2 - cy);
+    if (d < dist) [best, dist] = [i, d];
+  });
+  return best;
+}
+
+/**
+ * Reading cursor at `t`: the printed line (index into `segment.rects`) and x (PDF points).
+ * It sweeps each word, and the space after it, while the word is spoken — so it moves
+ * continuously along a line. Mirrors cursor_position() in the video compositor.
+ */
+export function cursorAt(segment: Pick<TimelineSegment, 'rects' | 'words'>, t: number): { line: number; x: number } | undefined {
+  const words = segment.words;
+  const lines = segment.rects;
+  if (!words?.length || !lines.length) return undefined;
+  const k = wordIndexAt(words, t);
+  const w = words[k];
+  const rs = w.rects.map((r) => [...r] as Rect);
+  const next = words[k + 1]?.rects[0];
+  const last = rs[rs.length - 1];
+  if (next && sameLine(last, next) && next[0] > last[2]) last[2] = next[0];
+  const dur = w.end - w.start;
+  const u = dur <= 0 ? 1 : Math.min(1, Math.max(0, (t - w.start) / dur));
+  const widths = rs.map((r) => Math.max(1e-6, r[2] - r[0]));
+  let pos = u * widths.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < rs.length; i++) {
+    if (pos <= widths[i] || i === rs.length - 1) {
+      const line = lineOf(lines, rs[i]);
+      const ln = lines[line];
+      return { line, x: Math.min(ln[2], Math.max(ln[0], rs[i][0] + Math.min(pos, widths[i]))) };
+    }
+    pos -= widths[i];
+  }
+  return undefined;
 }

@@ -142,3 +142,40 @@ def test_highlight_is_on_screen_while_read(size, animation, book, sample_pdf, tw
         x1, y1 = max(r[2] for r in rects), max(r[3] for r in rects)
         inside = (xs >= x0 - 12) & (xs <= x1 + 12) & (ys >= y0 - 12) & (ys <= y1 + 12)
         assert inside.mean() > 0.5
+
+
+@pytest.mark.parametrize("size", [(1920, 1080), (1080, 1920), (1080, 1080)])
+@pytest.mark.parametrize("fit,animation,frame", [("width", "follow", False), ("text", "static", True), ("text", "kenburns", False)])
+@pytest.mark.parametrize("book", ["sample", "twocol"])
+def test_full_width_keeps_the_sentence_in_the_picture(size, fit, animation, frame, book, sample_pdf, two_column_pdf, tmp_path):
+    """Full width / fit text zoom past the page height: the camera must follow whatever the
+    camera style, and the words being read stay inside the picture (inside the frame border)."""
+    pdf = sample_pdf if book == "sample" else two_column_pdf
+    segs, sizes = _sentence_segments(pdf)
+    W, H = size
+    style = {"animation": animation, "pageFit": fit, "showChapterTitle": False, "showProgress": False}
+    if frame:
+        style.update(frameStyle="solid", frameWidth=32, frameRadius=24)
+    params = {"width": W, "height": H, "fps": FPS, "totalDuration": segs[-1]["end"] + 1,
+              "chapter": {"title": "Chapter", "start": 0.0, "end": segs[-1]["end"] + 1},
+              "pages": {str(s["page"]): sizes[str(s["page"])] for s in segs}, "segments": segs,
+              "style": style, "pdfPath": pdf, "pageDir": str(tmp_path / "pages")}
+    params["pages"] = prepare_pages(params)
+    comp = ChapterCompositor(params)
+    x0b, y0b, x1b, y1b = comp.ox, comp.oy, comp.ox + comp.CW, comp.oy + comp.CH
+    page_w = min(sizes[str(s["page"])]["w"] for s in segs)
+    assert comp._run_scale[0] * page_w >= comp.CW - 1  # the page spans the picture width
+    off = []
+    for i, s in enumerate(segs):
+        for f in range(int(np.ceil(s["start"] * FPS)), int(s["end"] * FPS), 3):
+            t = f / FPS
+            reading, near_break = _reading_rects(s, t)
+            page, rects = comp.frame_rects(t, reading)
+            if page != s["page"] or near_break:
+                continue
+            for rx0, ry0, rx1, ry1 in rects:
+                over = max(x0b - rx0, y0b - ry0, rx1 - x1b, ry1 - y1b)
+                if over > 2.0:
+                    off.append((i, round(t - s["start"], 2), round(over)))
+                    break
+    assert not off, f"{len(off)} frames show the sentence being read outside the picture: {off[:10]}"

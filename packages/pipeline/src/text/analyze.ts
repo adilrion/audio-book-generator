@@ -7,10 +7,10 @@ import type { CleanPage, Token } from './model';
 import { headingNarration, isSpeakable, normalizeNarration } from './normalize';
 import { buildParagraphs, buildVocabulary, type RawParagraph } from './paragraphs';
 import { restoreSectionOpenings } from './dropcaps';
-import { regionsFor } from './regions';
+import { regionsFor, wordBoxes } from './regions';
 import { splitSentences } from './sentences';
 
-export const ANALYZER_VERSION = 'analyze-v2';
+export const ANALYZER_VERSION = 'analyze-v3';
 
 export interface CleanResult {
   pages: CleanPage[];
@@ -66,7 +66,7 @@ function buildSentences(p: RawParagraph, ci: number, pi: number, lang: string, l
     if (!toks.length || !isSpeakable(st)) continue;
     const narration = p.kind === 'heading' ? headingNarration(normalizeNarration(st, lang, lexicon)) : normalizeNarration(st, lang, lexicon);
     if (!isSpeakable(narration)) continue;
-    out.push({ id: `c${ci}-p${pi}-s${out.length}`, index: 0, text: st, narration, regions: regionsFor(toks) });
+    out.push({ id: `c${ci}-p${pi}-s${out.length}`, index: 0, text: st, narration, regions: regionsFor(toks), words: wordBoxes(toks) });
   }
   return out;
 }

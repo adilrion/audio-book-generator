@@ -91,6 +91,8 @@ keeping its own page and box. `regionsFor()` (`text/regions.ts`) merges the part
 into one rectangle per printed line and per page. So a sentence that starts mid-line highlights
 exactly its own words, and a sentence that continues on the next page has a region on both pages.
 `chars` records how many characters fall on each page; the timeline uses it to split time.
+`wordBoxes()` also keeps every printed word with its parts (`Sentence.words`, 0.1 pt precision)
+for word and cursor highlighting.
 
 `text` and `narration` are deliberately separate. `text` is exactly what is printed (after
 de-hyphenation and whitespace cleanup) and is used for subtitles and the UI. `narration` is what
@@ -329,8 +331,18 @@ construction (stored rounded to 0.1 ms). Trimming the engine's own silence means
 exactly what the pipeline asked for. Peaks above 0.99 are scaled down per sentence to avoid
 clipping.
 
-Word timings, when requested, are estimated inside the exact sentence window, proportional to
-word length + 1. The pipeline does not request them yet (highlighting is sentence-level).
+**Word timings** (word and cursor highlighting) are computed in the timeline stage
+(`timeline/words.ts`), not by the engines: the local engines report no word boundaries (the
+Kokoro ONNX export has no duration output). Inside each exact sentence window the time is shared
+by how long each word takes to say — spoken characters + 1, digits weighted extra, plus a pause
+for trailing `,` `;` `:` `—` and sentence-internal `.` `!` `?`, but none for abbreviations,
+initials or the last word (whose pause is trimmed off the audio). The error is bounded by the
+sentence: it can never drift into the next one. The voice reads the *narration* and the page shows
+the *printed* words, so the two are aligned first (longest common subsequence of normalized
+tokens): matching words are anchors and take the narration word's time, and the printed words
+between two anchors share the time between them ("e.g." takes the time of "for example"; a
+footnote marker that is not read gets none). If an engine ever reports word times
+(`SentenceTiming.words`), they are used instead of the estimate.
 
 ## Timeline math
 
@@ -344,6 +356,11 @@ word length + 1. The pipeline does not request them yet (highlighting is sentenc
   parts tile the interval. The page turns when the narration crosses the page break.
 - **Paragraph mode** keeps the sentence timing but highlights the paragraph's rectangles on the
   current page.
+- **Word and cursor modes** add `words` to every segment: each printed word's rectangles on that
+  page (from `Sentence.words`, recorded by the analyzer) and its time. Words are contiguous (each
+  ends where the next begins). A cross-page sentence turns the page exactly where the first word of
+  the next page is spoken, and a word hyphenated across two pages is split between them by printed
+  width. Sentence and paragraph timelines carry no words, so they stay small.
 - Each segment records `pageChange` for the renderer and the UI; `segmentAt()` finds the active
   segment by binary search.
 - **Frame ranges come from absolute times.** Chapter *k* is rendered as global frames
@@ -364,10 +381,29 @@ page (92 % of the frame). `follow` makes the page width 62 % of the frame width 
 in portrait/square), but never less than the fit, so body text is readable at 1080p and the
 camera pans vertically.
 
+**Page fit** (`fit_scale()`). `auto` is the above. `width` makes the page exactly as wide as the
+picture. `text` crops the page's own margins: the widest printed text of the chapter (from the
+segments' rectangles) spans the picture with a 3.5 % margin each side, never zooming out past
+`width`; each page is centred on its own text column (left and right pages have different
+margins), a page with only short lines on itself, and the camera never shows past the page's
+edges. Both fill modes follow the narration whatever the camera style (the page is taller than the
+frame) and clamp the camera to the page with no margin above or below.
+
+**Frame border** (`FrameBorder`). The picture is laid out in a box inset by the border width
+(`content_box()`, the width scales with `min(W, H) / 1080`), so the border never covers text and
+the progress bar and title card sit inside it. The border is drawn once into a full-frame
+template from the signed distance to the (optionally rounded) picture box, so curves and double
+lines are anti-aliased: `solid`; `double` (two lines a third of the width each, the inner one
+following the rounded corners, the gap in the theme background); `dashed` (dashes three widths
+long, gaps two, fitted so every edge starts and ends on a dash). Per frame only the four bands are
+copied and the four corner patches blended.
+
 **Camera path (`follow`).** For each sentence the target is the vertical center of its
 rectangles; for a block taller than 60 % of the visible height, its top is placed at 30 % of the
 frame instead. The camera only moves when the target leaves a **dead zone of 18 % of the visible
-height** around the current position, so it does not twitch on every line. A move is a 0.9 s
+height** around the current position, so it does not twitch on every line — or when the words would
+not be fully on screen (a target clamped at the page edge can sit inside the dead zone and still
+be cut off). A move is a 0.9 s
 **smootherstep** ease (zero velocity and acceleration at both ends) that starts 0.35 s before
 the sentence, and the center is clamped so the camera never leaves the page.
 
@@ -385,11 +421,22 @@ then fades out over 0.3 s; consecutive sentences cross-fade. Styles: `marker` (m
 ink stays dark and paper takes the color), `underline` and `box`. Rectangles are padded slightly
 relative to the line height.
 
+**Word and cursor highlights** move every frame, so they are drawn on the finished frame (page
+points → frame pixels with the frame's camera) instead of on the page canvas: no page-sized copy
+per frame. `word_marks()`: the word box glides to the next word over 0.12 s (smootherstep) when
+both are on one line — also from the last word of the previous sentence — and cross-fades in
+0.08 s when reading moves to a new line, so it never sweeps diagonally across the text.
+`cursor_marks()`: the cursor sweeps each word *and the space after it* while the word is spoken,
+so it moves continuously along a line; the read part of the sentence is highlighted line by line
+and a slim caret in a deeper shade marks the leading edge. With `sentenceTint` the whole sentence
+keeps a 30 % tint. Both fade out with the sentence highlight timing. A segment without word timings
+falls back to the sentence highlight.
+
 **Overlays.** A chapter title card is shown from 0.3 s to 5.3 s after the chapter starts (0.4 s
 fades), and a thin progress bar along the bottom shows the position in the whole book.
 
 **Frame reuse.** A frame is fully described by its *state*: page, camera center, scale, the
-highlight alphas (quantized to 1/16), the page-fade state (1/32), progress-bar pixel and title
+highlight alphas (quantized to 1/16), the word/cursor marks (rects quantized to ¼ pt), the page-fade state (1/32), progress-bar pixel and title
 alpha. If the state equals the previous frame's, the previous frame is sent again without any
 work. Page canvases (the raster on a background with a soft shadow) are kept in an LRU of 3, and
 page+highlight composites in an LRU of 4. The per-frame work is a single `cv2.warpAffine` to the
@@ -431,7 +478,7 @@ encoding of the listed inputs (`packages/shared/src/hash.ts`). The version const
 | Chapter audio | `audio/<key>.flac` + `.json` | TTS version, engine, provider version, voice, speed, `TTS_SAMPLE_RATE`, language, the chapter's segments (sentence ids, narration text, pause lengths) |
 | Audio master | `output/<project>/audiobook.m4a`, key in `manifest.json` | chapter audio keys, loudness normalization, `AUDIO_BITRATE`, `AUDIO_ENCODER`, chapter titles, book title |
 | Timeline, SRT, chapters.txt | `output/<project>/`, key in `manifest.json` | analysis key, chapter audio keys, fps, highlight mode |
-| Chapter video segment | `renders/video/<key>.mp4` | render version, PDF SHA-256, the chapter's audio key, width, height, fps, style (animation, subtle zoom, highlight style and color, theme, progress bar, chapter title card), encoder (`VIDEO_ENCODER`, `VIDEO_BITRATE`, `VIDEO_CRF`, `FFMPEG_BIN`), the chapter's highlight segments (times, pages, rects), chapter title, global frame range, and the book duration when the progress bar is on |
+| Chapter video segment | `renders/video/<key>.mp4` | render version, PDF SHA-256, the chapter's audio key, width, height, fps, style (animation, subtle zoom, highlight style and color, theme, progress bar, chapter title card; highlight mode and sentence tint for word/cursor, page fit and frame border only when not the default, so renders from before these options stay valid), encoder (`VIDEO_ENCODER`, `VIDEO_BITRATE`, `VIDEO_CRF`, `FFMPEG_BIN`), the chapter's highlight segments (times, pages, rects), chapter title, global frame range, and the book duration when the progress bar is on |
 | Final MP4 | `output/<project>/audiobook.mp4`, key in `manifest.json` | all segment keys, master key, embed-subtitles flag, language |
 | Page rasters | `renders/pages/<pdf>/<scale>/page-NNNN.png` | PDF SHA-256, render scale (in the path) |
 | UI previews | `renders/preview/<pdf>/page-NNNN.jpg` | PDF SHA-256, page (1.6 px/pt) |
