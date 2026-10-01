@@ -15,6 +15,7 @@ import os
 import re
 from collections import deque
 from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import pymupdf as fitz
@@ -411,14 +412,26 @@ def extract(path: str, out_dir: str, pdf_hash: str, ocr: str = "auto", ocr_langu
     words = 0
     sizes: list[list[float]] = []
     pool = None
+    pool_broken = False
     try:
         n = doc.page_count
         pending: deque = deque()  # (page index, text-layer damage, Future | (data, info)) in page order
 
+        def inline(i: int) -> tuple[dict, dict]:
+            page = doc[i]
+            data, work, _ = _triage(page, ocr, setup, bangla)
+            return _page_work(page, data, work, setup, bangla) if work else (data, {"ocr": False, "repaired": 0, "error": None})
+
         def write_next(fh) -> None:
             nonlocal repaired_words, words
             i, damage, item = pending.popleft()
-            data, info = item.result() if isinstance(item, Future) else item
+            if isinstance(item, Future):
+                try:
+                    data, info = item.result()
+                except BrokenProcessPool:  # a worker died (memory, killed): read the page here instead
+                    data, info = inline(i)
+            else:
+                data, info = item
             if info["error"] and ctx:
                 ctx.log(info["error"])
             if info["ocr"]:
@@ -441,11 +454,15 @@ def extract(path: str, out_dir: str, pdf_hash: str, ocr: str = "auto", ocr_langu
                     data, work, damage = _triage(page, ocr, setup, bangla)
                     text_pages += _char_count(data) >= MIN_TEXT_CHARS
                     none = {"ocr": False, "repaired": 0, "error": None}
-                    if work and ocr_workers > 1:
-                        if pool is None:
-                            pool = ProcessPoolExecutor(ocr_workers, mp_context=multiprocessing.get_context("spawn"),
-                                                       initializer=_init_worker, initargs=(path, password))
-                        pending.append((i, damage, pool.submit(_page_job, i, ocr, setup, bangla)))
+                    if work and ocr_workers > 1 and not pool_broken:
+                        try:
+                            if pool is None:
+                                pool = ProcessPoolExecutor(ocr_workers, mp_context=multiprocessing.get_context("spawn"),
+                                                           initializer=_init_worker, initargs=(path, password))
+                            pending.append((i, damage, pool.submit(_page_job, i, ocr, setup, bangla)))
+                        except BrokenProcessPool:
+                            pool_broken = True
+                            pending.append((i, damage, _page_work(page, data, work, setup, bangla)))
                     else:
                         pending.append((i, damage, _page_work(page, data, work, setup, bangla) if work else (data, none)))
                     page = None  # release page resources early

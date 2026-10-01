@@ -369,7 +369,16 @@ export class PipelineRunner {
         const m = await mainPool.call<ExtractionMeta>(
           'pdf.extract',
           // Bangla books quote English words and names: OCR with both scripts (ben alone when eng is missing).
-          { path: job.pdfPath, outDir: exDir, pdfHash: job.pdfHash, ocr: s.text.ocr, ocrLanguage: s.language === 'bn' ? 'ben+eng' : 'eng', password: job.password },
+          // Tesseract is single-threaded; OCR'd pages are read in as many processes as the power mode's cores.
+          {
+            path: job.pdfPath,
+            outDir: exDir,
+            pdfHash: job.pdfHash,
+            ocr: s.text.ocr,
+            ocrLanguage: s.language === 'bn' ? 'ben+eng' : 'eng',
+            ocrWorkers: Math.max(1, Math.min(8, this.cfg.cpuCount - 1, this.perf.current.ttsProcesses * this.perf.current.ttsThreads)),
+            password: job.password,
+          },
           {
             signal: this.signal,
             onProgress: (p) => {

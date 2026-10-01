@@ -122,6 +122,14 @@ def test_garbled_bangla_page_is_read_with_ocr(tmp_path):
     for w in ("কিছু", "দিন", "আগে", "তিনি", "বাড়ি", "গেলেন।"):
         assert w in words
 
+    # OCR in worker processes gives the same pages, in order.
+    doc.insert_pdf(fitz.open(str(path)))
+    doc.save(str(tmp_path / "bn2.pdf"))
+    one = ex.extract(str(tmp_path / "bn2.pdf"), str(tmp_path / "one"), "h", ocr="auto", ocr_language="ben+eng")
+    two = ex.extract(str(tmp_path / "bn2.pdf"), str(tmp_path / "two"), "h", ocr="auto", ocr_language="ben+eng", ocr_workers=2)
+    assert one["ocrPages"] == two["ocrPages"] == [1, 2]
+    assert (tmp_path / "one" / "pages.jsonl").read_bytes() == (tmp_path / "two" / "pages.jsonl").read_bytes()
+
 
 # ── Piper ───────────────────────────────────────────────────────────────────
 
