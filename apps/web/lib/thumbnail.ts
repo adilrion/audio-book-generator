@@ -382,9 +382,10 @@ function drawRibbon(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbC
   const { serif, sans } = c.fonts;
   backdrop(ctx, c.image, W, H, 0.72);
   book(ctx, c.image, 80, 80, 560, d.accent, title, serif);
+  // Text stays clear of the corner ribbon (top right).
   const x = 560;
-  let y = Math.max(150, 0);
-  y = titleBlock(ctx, { title, author: d.showAuthor ? c.author : undefined, x, y, width: 660, maxLines: 4, max: 110, min: 50, font: (px) => `600 ${px}px ${serif}`, color: '#fff', authorColor: 'rgba(255,255,255,0.85)', authorFont: `500 40px ${sans}` });
+  let y = 190;
+  y = titleBlock(ctx, { title, author: d.showAuthor ? c.author : undefined, x, y, width: 500, maxLines: 4, max: 104, min: 46, font: (px) => `600 ${px}px ${serif}`, color: '#fff', authorColor: 'rgba(255,255,255,0.85)', authorFont: `500 40px ${sans}` });
   if (d.showBadge) pill(ctx, c.badge, x + 2, Math.min(H - 110, y + 30), { bg: 'rgba(255,255,255,0.14)', fg: '#fff', font: `700 26px ${sans}`, h: 48 });
   if (kicker) {
     ctx.save();

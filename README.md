@@ -715,8 +715,8 @@ enqueues a job.
 | `GET /projects/:id/timeline` | | `Timeline` JSON (`409 NOT_READY` until audio is done) |
 | `GET /projects/:id/pages/:page/image` | | JPEG render of a PDF page (1.6 px/pt, cached) |
 | `GET /projects/:id/publish` | | `PublishState`: the draft (rule-based until saved), the book's facts and chapter times, the thumbnail, when the metadata was applied and whether the files or draft changed since (`stale`), the tags each file carries now (ffprobe) and the local AI's status |
-| `PUT /projects/:id/publish` | `{ draft: PublishDraft }` | `PublishState`. `400` for an invalid draft. |
-| `POST /projects/:id/publish/generate` | `{ sections: ["youtube", "social"], draft?, options?: { language, tone, keywords } }` | `PublishState` with the sections rewritten by the local AI and saved (20–60 s; closing the request stops the model). `409` when `LLM_ENABLED=false` or nothing is rendered yet, `503` when Ollama is down. |
+| `PUT /projects/:id/publish` | `{ draft: PublishDraft, label? }` | `PublishState`. The draft it replaces is kept in `history` (last 20). `400` for an invalid draft. |
+| `POST /projects/:id/publish/generate` | `{ sections: ["youtube", "social"], draft?, options?: { language, tone, keywords } }` | `{ proposal, model }`: the draft with those sections rewritten by the local AI — **not saved** (20–60 s; closing the request stops the model). `409` when `LLM_ENABLED=false` or nothing is rendered yet, `503` when Ollama is down. |
 | `POST /projects/:id/publish/apply` | | `PublishState`. Writes the file tags and cover art into `audiobook.mp4` / `audiobook.m4a` (stream copy, checked, then swapped in). `409` while queued or processing. |
 | `PUT /projects/:id/publish/thumbnail` | raw JPEG body (`Content-Type: image/jpeg`), ≤ 2 MB | `PublishState`; saved as `thumbnail.jpg` |
 | `DELETE /projects/:id/publish/thumbnail` | | `PublishState` |
@@ -972,24 +972,35 @@ open an issue with the log. Restart the project to rebuild every artifact.
 The **Publish** tab turns a finished book into an upload: everything YouTube Studio and the social
 apps ask for, checked and previewed, plus the metadata embedded in the files themselves.
 
-1. **Draft.** A rule-based draft is always there: title (`<title> by <author> – Full Audiobook…`,
-   fitted to the ~70 characters search shows), description, tags within YouTube's 500-character
-   budget, hashtags, pinned comment and posts for Facebook, Instagram, TikTok, X and LinkedIn — in
-   English or Bangla.
+1. **Draft.** A rule-based draft is always there: title in the search format
+   (`<title> by <author> | Full Audiobook with Text`, fitted to the ~70 characters search shows),
+   a description that opens with the book, the author and "audiobook" and ends with a call to
+   action, tags within YouTube's 500-character budget, `#Audiobook #<Title> #<Author>` hashtags, a
+   pinned comment and posts for Facebook, Instagram, TikTok, X and LinkedIn — in English or Bangla.
+   **Only part of the book narrated** (a chapter range, or chapters left out)? The tab says so, and
+   the copy names the part (`The Metamorphosis – Chapter I | Franz Kafka Audiobook with Text`,
+   "subscribe so you don't miss the next chapter") instead of promising a full audiobook.
 2. **Generate with AI** (optional) asks the local model for three title ideas, a 150–250-word
    description, tags, hashtags, category, thumbnail text, pinned comment and the five social posts,
    from the book's facts, chapter titles and opening text. Choose the language, tone and extra
-   search phrases first. Answers are cleaned (no links, timestamps, `<` `>` or stray hashtags,
-   platform length limits) and anything unusable falls back to the rules. Chapter timestamps are
-   never written by the model; they come from the timeline.
+   search phrases first. The model is asked for titles that pair the search format with a hook from
+   the premise, and a description whose first line makes people curious. Answers are cleaned (no
+   links, timestamps, `<` `>`, stray hashtags or "read-along"; no "full/complete" for a partial
+   narration; platform length limits), the titles are ranked so the best search title wins, and
+   anything unusable falls back to the rules. Chapter timestamps never come from the model.
+   **Nothing is overwritten:** the suggestion opens side by side with your draft — changed words
+   highlighted, the SEO score of both and of your selection — and you keep or take each field.
+   **Versions** keeps the last 20 saved drafts (and the rule-based one) to compare with and restore.
 3. **Edit and check.** Every field has a counter against YouTube's limits; the **SEO checks** score
    the draft (title length and main phrase near the start, opening line, description length,
    chapters — YouTube needs 3+ chapters of 10 s+ starting at 00:00 — tags, hashtags, thumbnail,
    pinned comment, file metadata). Click a check to jump to its field. The preview shows the watch
    page, a search result (desktop and phone) and each social post.
-4. **Thumbnail.** Four layouts (Cover, Bold, Minimal, Full image) drawn in the browser at 1280×720
-   from the book cover or your own image, with your text, accent colour, author and runtime badge.
-   **Save** stores the exact JPEG (≤ 2 MB).
+4. **Thumbnail.** Nine layouts, previewed live in a gallery: Cover, Listen now (play button and
+   sound wave), Opening line (the book's first sentence as a hook — editable), Bold, Split,
+   Cinematic, Ribbon, Minimal and Full image. Drawn in the browser at 1280×720 from the book cover or
+   your own image, with your text, accent colour, author and runtime badge. **Save** stores the
+   exact JPEG (≤ 2 MB).
 5. **Apply to files** writes title, author, album, genre, year, copyright, comment, the description
    (short and long), the tags as keywords, the audio/subtitle language and cover art (the thumbnail
    in the MP4, the book cover in the M4A, which is also marked as an audiobook) — without

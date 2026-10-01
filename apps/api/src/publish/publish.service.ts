@@ -299,10 +299,19 @@ export class PublishService {
 
 const defaultLabel = (d: PublishDraft) => (d.origin.youtube === 'ai' || d.origin.social === 'ai' ? `AI · ${d.model?.replace(/^ollama:/, '') ?? 'local model'}` : 'Rules');
 
-/** The first sentence that reads like prose (skips chapter titles and short headings), clipped to ~160 characters. */
+/**
+ * The first sentence that reads like prose (chapter titles and short headings are skipped). A
+ * sentence split across a page break is joined back together; the result is clipped to ~160 characters.
+ */
 export function openingLineOf(tl: Timeline | undefined): string | undefined {
-  const s = tl?.segments.find((seg) => seg.text.trim().length >= 40 && /\s\S+\s/.test(seg.text))?.text.replace(/\s+/g, ' ').trim();
-  if (!s) return undefined;
+  const segs = tl?.segments ?? [];
+  const first = segs.findIndex((seg) => seg.text.trim().length >= 40 && /\s\S+\s/.test(seg.text));
+  if (first < 0) return undefined;
+  let s = '';
+  for (let i = first; i < segs.length && s.length < 160; i++) {
+    s = `${s} ${segs[i].text}`.replace(/\s+/g, ' ').trim();
+    if (/[.!?…]["'’”)]*$/.test(s)) break;
+  }
   if (s.length <= 160) return s;
   const cut = s.slice(0, 159);
   return `${cut.slice(0, cut.lastIndexOf(' ') > 100 ? cut.lastIndexOf(' ') : 159).replace(/[,;:]$/, '')}…`;

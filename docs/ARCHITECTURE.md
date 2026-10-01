@@ -530,6 +530,14 @@ zoom changes scale every frame and composites each one.
   `-map_chapters 0` (FFmpeg rebuilds the QuickTime chapter track), sets the tags with `-metadata`
   (empty values clear a tag) and the cover as `attached_pic`. The result is probed (same duration,
   audio and video present) before it replaces the original; a ~1 GB MP4 takes seconds.
+- **Honest scope.** `coverage` compares the narrated words (timeline) with the words of the
+  book's body chapters (front and back matter excluded); below 85 % the video is a part, named
+  from its chapter titles (`partLabel`: "I" → "Chapter I"). The template, the AI prompt, the title
+  ranking and `scrub()` then avoid "full/complete", and the `scope` SEO check fails a draft that
+  still promises the whole book.
+- **Proposals and versions.** Generation returns a proposal and saves nothing; the editor merges
+  the fields you pick and saves them with a label ("AI · qwen3:4b", "AI + yours", "Restored from…").
+  Every save that changes the draft pushes the old one onto `history` (20 kept).
 - **Staleness.** After applying, the size and mtime of each file and a hash of everything that was
   written are recorded. A later pipeline run that re-muxes the file, or an edit to the draft or
   thumbnail, shows up as `stale: ["files"]` / `["draft"]`. The pipeline does not re-apply on its own.

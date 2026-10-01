@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Segmented, SegmentedItem } from '@/components/ui/segmented';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { ApiError, api, apiUrl, pageImageUrl, toApiError } from '@/lib/api';
 import { formatBytes, formatRelative } from '@/lib/format';
 import { THUMB_ACCENTS, THUMB_H, THUMB_LAYOUTS, THUMB_W, type ThumbContent, canvasToJpeg, drawThumbnail, loadFonts, loadImage, pageFonts } from '@/lib/thumbnail';
@@ -105,7 +106,7 @@ export function ThumbnailDesigner({
   const [error, setError] = useState<ApiError>();
   const [savedSig, setSavedSig] = useState<string>();
   const fileInput = useRef<HTMLInputElement>(null);
-  const ids = { text: useId(), kicker: useId(), author: useId(), badge: useId() };
+  const ids = { text: useId(), kicker: useId(), author: useId(), badge: useId(), quote: useId() };
 
   useEffect(() => {
     const f = pageFonts();
@@ -117,8 +118,8 @@ export function ThumbnailDesigner({
   const image = source === 'custom' && customImg ? customImg : coverImg;
   const sig = JSON.stringify([design, text, source, customImg?.src.slice(-32), !!coverImg]);
   const content = useMemo<ThumbContent | null>(
-    () => (fonts ? { title: text, author: ctx.author, badge: runtime(ctx.durationSec, ctx.language), image, fonts, quote: ctx.openingLine } : null),
-    [fonts, text, ctx.author, ctx.durationSec, ctx.language, ctx.openingLine, image],
+    () => (fonts ? { title: text, author: ctx.author, badge: runtime(ctx.durationSec, ctx.language), image, fonts, quote: design.quote ?? ctx.openingLine } : null),
+    [fonts, text, ctx.author, ctx.durationSec, ctx.language, ctx.openingLine, design.quote, image],
   );
 
   useEffect(() => {
@@ -213,6 +214,17 @@ export function ThumbnailDesigner({
           <Input id={ids.kicker} value={design.kicker} maxLength={40} onChange={(e) => set({ kicker: e.target.value })} disabled={disabled} />
         </PubField>
       </div>
+
+      {design.layout === 'quote' && (
+        <PubField
+          label="Opening line"
+          htmlFor={ids.quote}
+          counter={<CharCount value={[...(design.quote ?? ctx.openingLine ?? '')].length} max={160} warn={120} />}
+          hint="The book’s first sentence makes a strong hook. Fix it here if the PDF text is garbled, or pick a more gripping line."
+        >
+          <Textarea id={ids.quote} value={design.quote ?? ctx.openingLine ?? ''} onChange={(e) => set({ quote: e.target.value })} className="min-h-16" disabled={disabled} />
+        </PubField>
+      )}
 
       <div className="grid gap-2.5">
         <Label className="text-[13px]">Accent colour</Label>

@@ -52,6 +52,7 @@ export const publishDraftSchema = z.object({
       accent: z.string().regex(/^#[0-9a-f]{6}$/i),
       showAuthor: z.boolean(),
       showBadge: z.boolean(),
+      quote: text(300).optional(),
     })
     .optional(),
   videoUrl: z.union([z.literal(''), z.string().max(500).url().refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) link')]),

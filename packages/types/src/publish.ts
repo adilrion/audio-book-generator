@@ -109,8 +109,10 @@ export interface ThumbnailDesign {
   kicker: string;
   accent: string;
   showAuthor: boolean;
-  /** Runtime / read-along badge. */
+  /** Runtime badge. */
   showBadge: boolean;
+  /** The line the "Opening line" layout shows (default: the book's first sentence). */
+  quote?: string;
 }
 
 export interface PublishDraft {
