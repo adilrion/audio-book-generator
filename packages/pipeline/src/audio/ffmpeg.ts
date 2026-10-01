@@ -98,7 +98,7 @@ export async function masterAudio(
   cfg: AppConfig,
   inputs: string[],
   outFile: string,
-  o: { normalize: boolean; title: string; chapters: ChapterMark[]; workDir: string; signal?: AbortSignal; onTime?: (s: number) => void },
+  o: { normalize: boolean; title: string; chapters: ChapterMark[]; workDir: string; language?: string; signal?: AbortSignal; onTime?: (s: number) => void },
 ): Promise<void> {
   await ensureDir(o.workDir);
   const list = await writeConcatList(path.join(o.workDir, 'audio-concat.txt'), inputs);
@@ -111,11 +111,15 @@ export async function masterAudio(
     cfg.FFMPEG_BIN,
     ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:2', '-f', 'concat', '-safe', '0', '-i', list, '-i', meta,
       '-map', '0:a', '-map_metadata', '1', '-map_chapters', '1', '-af', filters, '-ac', '1',
+      ...(o.language ? ['-metadata:s:a:0', `language=${iso639_2(o.language)}`] : []),
       '-c:a', codec, '-b:a', cfg.AUDIO_BITRATE, '-movflags', '+faststart', tmp],
     { signal: o.signal, onTime: o.onTime },
   );
   await fsp.rename(tmp, outFile);
 }
+
+/** The three-letter code MP4/M4A players show for a stream ("bn" → "ben"). */
+const iso639_2 = (lang: string) => (lang === 'bn' ? 'ben' : 'eng');
 
 /** Concatenate chapter video segments (stream copy) + mastered audio (+ soft subtitles) → final MP4. */
 export async function muxFinal(
@@ -134,7 +138,8 @@ export async function muxFinal(
   args.push('-i', meta);
   const metaIdx = o.srt ? 3 : 2;
   args.push('-map', '0:v:0', '-map', '1:a:0');
-  if (o.srt) args.push('-map', '2:s:0', '-c:s', 'mov_text', '-metadata:s:s:0', `language=${o.language === 'bn' ? 'ben' : 'eng'}`);
+  args.push('-metadata:s:a:0', `language=${iso639_2(o.language)}`);
+  if (o.srt) args.push('-map', '2:s:0', '-c:s', 'mov_text', '-metadata:s:s:0', `language=${iso639_2(o.language)}`);
   args.push('-map_metadata', String(metaIdx), '-map_chapters', String(metaIdx), '-c:v', 'copy', '-c:a', 'copy', '-movflags', '+faststart');
   const tmp = `${outFile}.tmp.mp4`;
   args.push(tmp);

@@ -110,13 +110,43 @@ used, because it would merge the two halves of a word and lose one of the boxes.
 - Per line, the dominant font size, font name and bold/italic flags are kept for the heading and
   chapter heuristics.
 - OCR (`ocr=auto`) runs only on pages with fewer than 20 characters of text **and** at least one
-  image, at 200 dpi, via PyMuPDF's Tesseract integration (`eng`, or `ben` for Bangla).
-  `ocr=force` OCRs every page; `off` never does.
+  image, at 200 dpi, via PyMuPDF's Tesseract integration (`eng`, or `ben+eng` at 300 dpi for
+  Bangla). `ocr=force` OCRs every page; `off` never does. The language data is looked up in
+  Tesseract's own folder first, then in `TESSDATA_DIR` (`storage/models/tessdata`, filled by
+  `download-models.sh bangla`); PyMuPDF has the OCR engine built in.
+- OCR'd text has no space characters. Tesseract writes each word as its own span, so a span is a
+  word; inside a span a gap of more than half a character advance splits it. The glyph-less OCR
+  font gives every character of a word the same advance, but zero-width marks (`্ ু ়`) collapse
+  their boxes, so gaps are measured from the advance, not from the previous box. Tesseract also
+  stretches every word to its printed width, so for Bangla the line size comes from the character
+  box height and is evened out per block and then per page (`_even_sizes`).
 - `meta.json` stores page count, page sizes, the PDF outline (TOC), title/author, and the lists of
-  empty and OCR'd pages.
+  empty, OCR'd and garbled pages.
+
+**Bangla text layers** (project language `bn`). Many Bangla PDFs do not carry real Unicode Bangla.
+`bangla_damage()` is the share of a page's Bangla words that `damaged_word()` rejects: a dependent
+sign (vowel sign, hasanta, nukta) that does not follow a consonant (vowel signs stored in visual
+order, `িক` for `কি`, or a conjunct glyph with no Unicode mapping, `িতীয়` for `দ্বিতীয়`), an unmapped
+glyph (U+FFFD, private use), or a joiner at a word edge (Microsoft Word puts ZWNJ where the spaces
+were). A legacy ANSI font (`…MJ`, SutonnyMJ/Bijoy) counts as fully damaged. Above 8 % the page is
+OCR'd. Below that, `repair_lines_with_ocr()` OCRs only the lines with damaged words (one by one,
+or the whole page when more than three) and takes the OCR'd spelling of each damaged word whose box
+it overlaps. On an OCR'd Bangla page, `reread_latin_words()` reads every short Latin word once more
+on its own and keeps the result only if it is a single well-formed Bangla word (`fod` → `চিক্কণ`).
+Two repairs apply to every Bangla line: MuPDF keeps each line's text from the PDF's ActualText
+(the `blocks` output), while its characters can lose a line's last cluster (`কিছু` → `কিছ`), so
+when both split into the same number of words the line text wins; and pieces of one printed line
+that MuPDF returns as separate lines on one baseline (`জিজ্ঞে` | `স করল…`) are joined, with the
+word at a seam that has no printed space on either side made whole again.
+
+OCR is single-threaded and slow for Bangla (`tessdata_best`: about 10 s per page on an M4), so pages
+that need it are read in a pool of `ocrWorkers` processes (`spawn`), sized from the power mode's
+cores. Results are written in page order with at most 2 × `ocrWorkers` pages in flight; a broken
+pool falls back to reading the page in the main process.
 
 Errors are classified at the source: `PDF_CORRUPT`, `PDF_UNSUPPORTED`, `PDF_PASSWORD`, `PDF_EMPTY`,
-`PDF_NO_TEXT`, `PDF_SCANNED` (image-only and no OCR available).
+`PDF_NO_TEXT`, `PDF_SCANNED` (image-only and no OCR available), `PDF_TEXT_GARBLED` (more than half
+of the text pages have a damaged Bangla text layer and Bangla OCR is not available).
 
 ## Text cleaning heuristics
 
@@ -128,8 +158,8 @@ Errors are classified at the source: `PDF_CORRUPT`, `PDF_UNSUPPORTED`, `PDF_PASS
 | Overprinted duplicates ("fake bold") | Same word or line at the same place (IoU > 0.7) is dropped |
 | Soft hyphens, zero-width characters | Normalized or removed |
 | Header/footer zones | Only lines entirely within the top or bottom `max(36 pt, 9 % of page height)` are candidates. The zone is widened to take in the book's own page-number band (`text/furniture.ts`): where number-only lines (arabic digits, ≤ 1.15 × body) line up within 6 pt on at least `max(3, 20 % of pages)` pages, in the outer quarter of the page. Scans and ebook layouts often print the folio and running footer well inside the page (*The Metamorphosis*: 70 pt above the bottom of a 484 pt page) |
-| Running headers/footers | A line's *header key* replaces digits and roman numerals with `#` and strips punctuation, so "Chapter 3 — The Mill 47" and "Chapter 3 — The Mill 48" match. It is removed if the same key appears in the same zone on at least `max(3, 20 % of pages)` pages (2 pages for books of 4 pages or fewer), or on ≥ 3 pages when the line is short (≤ 12 words) and not larger than body text |
-| Page numbers | In a margin zone: `12`, `xii`, `- 12 -`, `Page 12`, `12 of 300`, `12/300`. In the learned page-number band, also any lone token of ≤ 4 characters up to 1.6 × body: OCR misreads a folio as `3B`, `nm`, `a` |
+| Running headers/footers | A line's *header key* replaces digits (ASCII or Bangla) and roman numerals with `#` and strips punctuation, so "Chapter 3 — The Mill 47" and "Chapter 3 — The Mill 48" match. It is removed if the same key appears in the same zone on at least `max(3, 20 % of pages)` pages (2 pages for books of 4 pages or fewer), or on ≥ 3 pages when the line is short (≤ 12 words) and not larger than body text |
+| Page numbers | In a margin zone: `12`, `xii`, `- 12 -`, `Page 12`, `12 of 300`, `12/300`, and in Bangla digits (`১২`, `পৃষ্ঠা ১২`). In the learned page-number band, also any lone token of ≤ 4 characters up to 1.6 × body: OCR misreads a folio as `3B`, `nm`, `a` |
 | OCR'd drop-cap lines | OCR gives a line that starts with a drop cap the drop cap's height (14 pt in a 9 pt book). When the next line starts inside it, indented beside the letter, the line takes the body size, so it stays in its paragraph instead of becoming a heading |
 | TOC leader lines | `Introduction ........ 7` anywhere on the page |
 
@@ -170,21 +200,28 @@ so the Bangla danda `।` works) and then repairs its known weaknesses:
 
 - **Abbreviations**: "strong" ones (`Mr.`, `Dr.`, `e.g.`, `No.`, `Fig.` …) never end a sentence;
   "weak" ones (`etc.`, `Inc.`, month names …) end it unless the next word is lowercase. Single
-  capital initials ("J. R. R. Tolkien") never end a sentence.
+  capital initials ("J. R. R. Tolkien") never end a sentence. Bangla has no letter case and ends
+  sentences with `।`, so every Bangla abbreviation (`ডা.`, `মো.`, `খ্রি.`, `পৃ.` …) and every
+  one-letter initial (`এ. কে.`) is strong.
 - Fragments of 2 characters or fewer are merged into the neighbouring sentence.
 - Sentences longer than 320 characters are split recursively at the clause boundary nearest the
   middle (`;` `:` `—` preferred over `,`, at least 40 characters on each side). This keeps TTS
   requests short and highlights readable.
 
-Headings are one "sentence" each and get a trailing full stop in the narration so the voice uses
-falling intonation.
+Headings are one "sentence" each and get a trailing full stop (`।` in Bangla) in the narration so
+the voice uses falling intonation.
 
 A paragraph that is nothing but a section or page number (`I`, `II.`, `12`, `§ 3`, and OCR's `Ul`/`Il` for II/III) is neither narrated nor highlighted (`isSectionNumber`): read aloud, `I.` sounds like the pronoun. It still counts for chapter detection, and the chapter title keeps the number. Roman numerals must be well formed and below 400, so `MILD` or `mix` stay text.
 
 `text/normalize.ts` changes only the narration: typographic quotes, footnote markers (`word.12`,
 `[3]`), dashes → commas, URLs without the scheme, and for English `e.g.` → "for example", `i.e.`
 → "that is", `etc.` → "et cetera", `vs.`, `cf.`, `No. 5`, `pp. 12`, `p. 7`, `ch. 3`, `fig. 2`,
-`&`, `%`. The optional pronunciation lexicon is applied last, on word boundaries.
+`&`, `%`. For Bangla (`text/bangla.ts`): abbreviations in full (`ডা.`/`ডাঃ` → ডাক্তার, `মোঃ` →
+মোহাম্মদ, `পৃ.`, `নং`, `(সা.)` …), four-digit years after a month or before সাল/খ্রিস্টাব্দ/বঙ্গাব্দ in
+hundreds (`১৯৭১` → উনিশশো ৭১), `%` → শতাংশ, a word-final visarga as a colon (`প্রশ্নঃ`) or dropped
+after an adverb (`সাধারণতঃ`), footnote digits after a word, ZWJ/ZWNJ removed, and a full stop inside
+the sentence dropped (espeak-ng would end the sentence there). The optional pronunciation lexicon
+is applied last, on word boundaries.
 
 ## Chapter detection
 
@@ -197,8 +234,9 @@ first one that yields at least two chapters wins:
    to the first paragraph starting on or after that page.
 2. **Textual patterns** on heading-like lines (heading font, first line on a page, or bold; at
    most 16 words): `Chapter 3`, `Chap. IV`, `CHAPTER ONE`, `Part II`, `Book 2`, `Section 5`,
-   `Prologue`, `Epilogue`, `Introduction`, `Preface`, `Appendix A`, `অধ্যায় ৩` …, plus numbered
-   headings like `1. Introduction`. A heading right after "Chapter 1" on the same page becomes
+   `Prologue`, `Epilogue`, `Introduction`, `Preface`, `Appendix A`, and in Bangla `অধ্যায় ৩`,
+   `প্রথম অধ্যায়`, `৩য় পরিচ্ছেদ`, `পর্ব ২`, `ভূমিকা`, `উপসংহার` … (matched in NFC, so either spelling
+   of `য়`/`ড়`/`ঢ়` works), plus numbered headings like `1. Introduction` and `১। ভূমিকা`. A heading right after "Chapter 1" on the same page becomes
    its subtitle ("Chapter 1: The Beginning"), not a separate chapter. Accepted when there are
    between 2 and paragraphs/3 matches.
 
@@ -318,6 +356,11 @@ cached extraction and analysis.
 segments: 280 ms after a sentence, 650 ms after a paragraph (+250 ms after a heading), 1800 ms
 after the last sentence of the chapter (defaults, configurable per project in `audio.*`).
 
+**Piper and Bangla.** A Piper model with up to 32 speakers is listed once per speaker,
+`<model>:<speaker>` (`bn_BD-google-medium:4811`); the plain model id is its default speaker. Before
+synthesis, a Bangla text gets ড় ঢ় য় as single code points: espeak-ng's Bangla rules drop the vowel
+after the letter + nukta spelling that NFC produces (`বাড়ি` → `bar.`).
+
 `tts/service.py → synthesize_chapter()` writes **one FLAC per chapter**:
 
 ```text
@@ -436,7 +479,9 @@ keeps a 30 % tint. Both fade out with the sentence highlight timing. A segment w
 falls back to the sentence highlight.
 
 **Overlays.** A chapter title card is shown from 0.3 s to 5.3 s after the chapter starts (0.4 s
-fades), and a thin progress bar along the bottom shows the position in the whole book.
+fades), and a thin progress bar along the bottom shows the position in the whole book. A title with
+Bangla letters is set in Kohinoor Bangla (or Bangla Sangam MN, Bangla MN, Noto Sans Bengali), which
+Pillow shapes with libraqm; a long title is cut at a word boundary.
 
 **Frame reuse.** A frame is fully described by its *state*: page, camera center, scale, the
 highlight alphas (quantized to 1/16), the word/cursor marks (rects quantized to ¼ pt), the page-fade state (1/32), progress-bar pixel and title

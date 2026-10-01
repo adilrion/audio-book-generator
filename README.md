@@ -40,6 +40,7 @@ book.pdf  ──►  audiobook.mp4   1920×1080 H.264 + AAC, highlighted pages, 
 - [Processing pipeline](#processing-pipeline)
 - [Storage layout](#storage-layout)
 - [Troubleshooting](#troubleshooting)
+- [Bangla audiobooks (বাংলা)](#bangla-audiobooks-বাংলা)
 - [Power modes (heat, fan noise and battery)](#power-modes-heat-fan-noise-and-battery)
 - [Performance tuning for a 16 GB Mac](#performance-tuning-for-a-16-gb-mac)
 - [Extending](#extending)
@@ -64,6 +65,11 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Chapter detection in a fixed order:** PDF outline, then textual patterns (`Chapter 3`, `PART ONE`,
   `Prologue`, and bare chapter labels set in body text), then heading font sizes, then the local LLM
   (only for ambiguous structure), then about 12-page sections as a fallback.
+- **English and Bangla.** Bangla (বাংলা) books are narrated by Piper's Bangladeshi voice
+  `bn_BD-google-medium` (16 speakers). Bangla PDFs with a broken text layer (legacy Bijoy fonts,
+  Microsoft Word exports, conjuncts that do not map to Unicode) are read with Tesseract's Bangla OCR
+  instead. Bangla page numbers, chapter labels (`প্রথম অধ্যায়`, `অধ্যায় ৩`), abbreviations (`ডা.`)
+  and years (`১৯৭১ সালে`) are handled. See [Bangla audiobooks](#bangla-audiobooks-বাংলা).
 - **Chapter review before narration.** New projects pause after chapter detection (status
   `AWAITING_REVIEW`) so you can untick, rename or merge chapters before hours of narration start.
   Back matter (licence text, index, "about the author") starts unticked and is skipped by default.
@@ -374,6 +380,9 @@ file is only moved into place once it is complete. It exits non-zero if anything
 | Kokoro-82M v1.0 ONNX (`kokoro-v1.0.onnx`) | 325.5 MB | `KOKORO_MODEL_PATH` (`storage/models/kokoro/`) | `pnpm setup:models` |
 | Kokoro voice pack (`voices-v1.0.bin`, 54 voices) | 28.2 MB | `KOKORO_VOICES_PATH` | (same) |
 | Piper voice `en_US-lessac-medium` (`.onnx` + `.onnx.json`) | ~63 MB | `PIPER_MODEL_DIR` (`storage/models/piper/`) | `pnpm setup:models piper` |
+| `TESSDATA_DIR` | `./storage/models/tessdata` | Tesseract language data from `pnpm setup:models bangla` (`ben`, `eng`). Tesseract's own folder is tried first, so English OCR does not change when the Bangla data is added. |
+| Piper Bangla voice `bn_BD-google-medium` (16 speakers) | 76.8 MB | `PIPER_MODEL_DIR` | `pnpm setup:models bangla` |
+| Tesseract `ben` + `eng` OCR data ([tessdata_best](https://github.com/tesseract-ocr/tessdata_best)) | 11.0 + 15.4 MB | `TESSDATA_DIR` (`storage/models/tessdata/`) | (same) |
 | Ollama `qwen3:4b` (or `$OLLAMA_MODEL`) | 2.5 GB | Ollama's own model store | `pnpm setup:models ollama` |
 
 `pnpm setup:models all` fetches everything. Kokoro comes from the
@@ -385,7 +394,7 @@ Piper voices from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-vo
 | Engine | Install | Voices | Notes |
 |---|---|---|---|
 | `kokoro` (default) | `pnpm setup:python` + `pnpm setup:models` | 54 voices, 28 English: `af_*`/`am_*` American, `bf_*`/`bm_*` British (`af_heart`, `am_michael`, `bf_emma`, …) | Kokoro-82M v1.0 via `kokoro-onnx` and onnxruntime on CPU. About 5× realtime per process on an M4. |
-| `piper` (optional) | `pnpm setup:python --piper` + `pnpm setup:models piper` | Every `<voice>.onnx` + `.onnx.json` in `PIPER_MODEL_DIR`; the id is the file stem (`en_US-lessac-medium`) | Very fast and lightweight. Add more voices from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) by dropping both files into `storage/models/piper/`. |
+| `piper` (optional; the Bangla engine) | `pnpm setup:python --piper` + `pnpm setup:models piper` (English) or `bangla` | Every `<voice>.onnx` + `.onnx.json` in `PIPER_MODEL_DIR`; the id is the file stem (`en_US-lessac-medium`). A model with up to 32 speakers is listed once per speaker as `<stem>:<speaker>` (`bn_BD-google-medium:4811`); the plain stem is its default speaker | Very fast and lightweight (Bangla: about 12× realtime per process on an M4). Add more voices from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) by dropping both files into `storage/models/piper/`. |
 | `say` (fallback) | nothing, it is built into macOS | System voices (`say -v '?'`), e.g. `Samantha` | Zero-install fallback. Better voices can be downloaded in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices. |
 
 Choose the default with `TTS_ENGINE` and `TTS_DEFAULT_VOICE`, or per project in the UI, the API
@@ -573,6 +582,7 @@ pnpm audiobook ./book.pdf --mode audio                      # audiobook only (sk
 pnpm audiobook ./book.pdf --animation static --fps 24       # fastest video
 pnpm audiobook ./book.pdf --engine say --voice Samantha --no-llm
 pnpm audiobook ./scan.pdf --ocr force                       # OCR every page (needs tesseract)
+pnpm audiobook ./boi.pdf --language bn                      # Bangla: Piper voice bn_BD-google-medium:4811
 npm run audiobook:create -- ./book.pdf                      # npm needs the `--`
 
 node apps/cli/dist/main.js inspect ./book.pdf               # page count, word estimate, scan detection (JSON)
@@ -590,8 +600,9 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 |---|---|---|
 | `--out <dir>` | `./output` | Where the final files are written (hard-linked from storage, copied if that fails) |
 | `--mode` | `video` \| `audio` (`video`) | Audiobook + animated PDF, or audiobook only |
-| `--engine` | `kokoro` \| `piper` \| `say` (`$TTS_ENGINE`) | TTS engine |
-| `--voice <id>` | `$TTS_DEFAULT_VOICE`, or the engine's default voice | e.g. `af_heart`, `am_michael`, `bf_emma`, `en_US-lessac-medium`, `Samantha` |
+| `--language` | `en` \| `bn` (`en`) | Language of the book. `bn` (Bangla) switches the default engine to `piper` and the voice to `bn_BD-google-medium:4811`, OCRs garbled Bangla pages and applies the Bangla text rules |
+| `--engine` | `kokoro` \| `piper` \| `say` (`$TTS_ENGINE`; `piper` for Bangla) | TTS engine |
+| `--voice <id>` | `$TTS_DEFAULT_VOICE`, or the engine's default voice for the language | e.g. `af_heart`, `am_michael`, `bf_emma`, `en_US-lessac-medium`, `bn_BD-google-medium:4811`, `Samantha` |
 | `--speed <n>` | 0.5–2.0 (`1`) | Speaking rate (the API enforces the range; the CLI passes the number through) |
 | `--aspect` | `16:9` \| `9:16` \| `1:1` (`16:9`) | 1920×1080, 1080×1920 or 1080×1080 |
 | `--fps <n>` | `$VIDEO_FPS` (30) | Frame rate |
@@ -617,7 +628,7 @@ node apps/cli/dist/main.js sample ./sample-book.pdf --chapters 3 --paras 7 [--no
 | `--verbose` | off | Developer logs and technical error details |
 
 Settings without a CLI flag (subtle zoom, progress bar, chapter title cards,
-embedded subtitles, pause lengths, loudness normalization, a custom resolution, language) keep
+embedded subtitles, pause lengths, loudness normalization, a custom resolution) keep
 their defaults in the CLI; change them through the web UI or the API.
 
 How CLI runs are stored: the project id is `cli-<first 16 hex chars of the PDF's SHA-256>`, and its
@@ -868,10 +879,18 @@ and skips files that are already complete. If `kokoro-onnx` is missing, run `pnp
 
 #### "The voice "…" is not installed"
 Voice ids are engine-specific. List them with `node apps/cli/dist/main.js voices --engine <engine>`.
+After updating the Python worker, restart `pnpm dev`: the API and the worker keep their Python
+processes (and their voice lists) until they restart, and `dev:worker` does not reload when
+`packages/pipeline` is rebuilt.
+
+#### "The Bangla text in this PDF cannot be read directly" (`PDF_TEXT_GARBLED`)
+The PDF's Bangla text layer is unusable: a legacy ANSI font such as SutonnyMJ (Bijoy), or a Word
+export whose text maps glyphs to the wrong letters. Such pages are read with OCR, which needs the
+Bangla language data: `pnpm setup:models bangla`, then Retry.
 
 #### Scanned PDF ("This PDF is a scan (images only)…")
 Install Tesseract (`brew install tesseract`) and keep OCR at `auto` (or use `force`). For Bangla OCR,
-also run `brew install tesseract-lang`. OCR runs at 200 dpi and is slow compared to text extraction:
+run `pnpm setup:models bangla` (Tesseract's `ben` model in `storage/models/tessdata/`). OCR runs at 200 dpi and is slow compared to text extraction:
 about 1.4 s per page on the M4 (a 280-page scan ≈ 7 min). Measured on 6 pages of *Pride and
 Prejudice* rasterized to 200 dpi grey images with no text layer: 98.5 % of the OCR words match the
 printed text exactly and every chapter was still found. Typical Tesseract slips are an opening `“I`
@@ -930,6 +949,63 @@ Lower `MAX_CONCURRENT_TTS` and/or `MAX_CONCURRENT_PDF_RENDER` to `1`, keep
 #### "The final video failed the audio/video sync check."
 This should not happen. Resume once; if it repeats, run with `--verbose` or `LOG_LEVEL=debug` and
 open an issue with the log. Restart the project to rebuild every artifact.
+
+---
+
+## Bangla audiobooks (বাংলা)
+
+Choose **Bangla** as the language (web UI: Narration → Language; API: `"language": "bn"`; CLI:
+`--language bn`). A Bangla project starts on the Piper engine with the voice
+`bn_BD-google-medium:4811`. Kokoro has no Bangla voice and is refused for Bangla.
+
+```bash
+pnpm setup:python --piper     # once: the Piper engine
+pnpm setup:models bangla      # the Bangla voice (77 MB) + Bangla/English OCR data (26 MB)
+pnpm audiobook ./boi.pdf --language bn --mode audio
+```
+
+**Voices.** [`bn_BD-google-medium`](https://huggingface.co/rhasspy/piper-voices/tree/main/bn/bn_BD/google/medium)
+is trained on Google's crowdsourced Bangladeshi Bengali corpus ([OpenSLR 37](http://www.openslr.org/37/),
+CC BY-SA 4.0) and CMU Indic. Its 16 speakers appear as 16 voices (`Google 1` … `Google 16`). By
+measured pitch, speakers `4811` (Google 13, the default) and `rm` (Google 16) are female and the
+others male. Listen to a few and pick one. The voice is part of the audio cache key, so changing it
+re-narrates.
+
+**Reading the PDF.** Many Bangla PDFs have a text layer that is not real Unicode Bangla. The extractor
+measures the damage on every page: words that start with a vowel sign or have one after a
+non-consonant (`িক` for `কি`), unmapped glyphs, joiners at word edges, legacy Bijoy (`…MJ`) fonts.
+A page is read with Tesseract (`ben+eng`, 300 dpi, `tessdata_best`) when more than 8 % of its Bangla
+words are damaged. A page with only a few damaged words keeps its text layer, and only those words
+are replaced by their OCR'd spelling (Chrome's Kohinoor Bangla drops `দ্ব` before `ি`/`ে`). OCR runs
+in as many processes as the power mode's cores: on an M4 that is about 2.7 s per page in Balanced
+mode (10.6 s per page in one process). Measured on a 10-page Microsoft Word export of Tagore's
+*পোস্টমাস্টার*: every page was OCR'd, the running header and footer were removed, and about 1 % of
+the words came out wrong (for example `কুণ্ডলায়িত` read as `FATS`). A short Latin word on an OCR'd
+Bangla page is read once more on its own, which rescued 4 of 13 such words. The rest stay as they
+are, so check the subtitles of an OCR'd book. Without the Bangla OCR data, a PDF whose pages are
+mostly garbled fails with `PDF_TEXT_GARBLED` instead of narrating garbage.
+
+**Text rules** (`packages/pipeline/src/text/bangla.ts` and the shared text code):
+
+- Sentences end at `।`, `?` and `!`. `ডা.`, `মো.`, single-letter initials (`এ. কে.`) and decimals
+  (`৩.৫`) do not end a sentence. Headings get a `।` so the voice falls in pitch.
+- Page numbers and running headers in Bangla digits (`১২`, `- ১২ -`, `পৃষ্ঠা ১২`) are removed.
+- Chapters: `অধ্যায় ৩`, `অধ্যায়-১২`, `প্রথম অধ্যায়`, `৩য় পরিচ্ছেদ`, `পর্ব ২`, numbered headings
+  (`১। ভূমিকা`) and named sections (`ভূমিকা`, `মুখবন্ধ`, `উপসংহার`, `পরিশিষ্ট`, …), in either spelling
+  of `য়`/`ড়`/`ঢ়`. Front matter (`সূচিপত্র`, `উৎসর্গ`, …) and back matter (`নির্ঘণ্ট`, `গ্রন্থপঞ্জি`,
+  `লেখক পরিচিতি`, …) are recognized. Fallback names are `প্রারম্ভিক অংশ` and `পর্ব ১`, `পর্ব ২`, ….
+- A vowel sign printed twice by Chrome/Skia (`অধ্যাায়`) is collapsed. MuPDF's line text (from the
+  PDF's ActualText) restores a line's last cluster that its characters lost (`কিছু` read as `কিছ`),
+  and a printed line that MuPDF cuts in two (`জিজ্ঞে` | `স করল…`) is joined again.
+- Narration: `ডা.`/`ডাঃ` → ডাক্তার, `মো.`/`মোঃ` → মোহাম্মদ; `খ্রি.`, `পৃ.`, `নং`, `(সা.)` and other
+  honorifics are spoken in full; `১৯৭১ সালে` → উনিশশো ৭১ সালে (a year after a month, or before
+  সাল/খ্রিস্টাব্দ/বঙ্গাব্দ); `%` → শতাংশ; a visarga used as a colon (`প্রশ্নঃ`) becomes a pause;
+  footnote digits are dropped. Piper reads ASCII and Bangla digits alike, including lakh and crore.
+- The video title card uses Kohinoor Bangla, shaped by libraqm. The M4A audio and the MP4 audio and
+  subtitle tracks are tagged `ben`.
+
+Not done for Bangla: the local LLM is not asked to repair Bangla text, there is no pronunciation
+lexicon, and macOS has no built-in Bangla `say` voice.
 
 ---
 
@@ -1130,28 +1206,6 @@ schema, the CLI help, the web form, and the browser preview's CSS approximation
 compositor's `THEMES`, the `VideoTheme` type and schema, and `THEMES` in
 `apps/web/components/settings-form.tsx`.
 
-### Bangla roadmap
-
-What is already language-aware:
-
-- Sentence segmentation uses ICU (`Intl.Segmenter`) with the project language and handles the
-  dari `।`.
-- Chapter patterns include `অধ্যায়` with Bengali digits.
-- OCR requests Tesseract's `ben` model when `language: "bn"`.
-- The subtitle track is tagged `ben`.
-- The API refuses `bn` with Kokoro and points here.
-
-What is missing:
-
-1. **A Bangla TTS engine** (the main gap): for example Meta's MMS-TTS Bengali VITS model (check its
-   license: the MMS weights are CC-BY-NC 4.0), or a Bangla VITS voice exported to Piper's ONNX format,
-   which would work with the existing Piper engine as-is. Add it as described above.
-2. **Narration normalization for Bangla** (numbers, abbreviations). `normalizeNarration()` currently
-   applies English rules only.
-3. `brew install tesseract-lang` for the `ben` OCR model.
-4. **A Bangla-capable font** for chapter title cards. The compositor's `FONT_CANDIDATES` are
-   Latin-only; macOS ships Kohinoor Bangla and Bangla MN.
-
 ---
 
 ## Testing
@@ -1212,7 +1266,7 @@ Also deliberately limited in V1:
 
 - Highlighting is sentence- or paragraph-level, not word-by-word. The TTS layer can estimate word
   timings, but the pipeline does not use them yet.
-- English is the tuned language; Bangla is on the [roadmap](#bangla-roadmap).
+- English and Bangla are the supported languages (see [Bangla audiobooks](#bangla-audiobooks-বাংলা)).
 - 9:16 and 1:1 work, but the layout is tuned for 16:9.
 - Encrypted PDFs are supported through the CLI only.
 - One machine, local processes, local storage.

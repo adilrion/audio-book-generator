@@ -53,7 +53,7 @@ import { CachePaths, type ProjectManifest } from './paths';
 import { PerformanceController, machineInfo, type PoolRole } from './performance';
 import type { OutputRecord, PipelineStore } from './store';
 
-export const EXTRACT_VERSION = 'extract-v2';
+export const EXTRACT_VERSION = 'extract-v3';
 export const TTS_VERSION = 'tts-v1';
 export const RENDER_VERSION = 'render-v1';
 
@@ -496,6 +496,7 @@ export class PipelineRunner {
           title: analysis.title,
           chapters: chapterMarks,
           workDir,
+          language: s.language,
           signal: this.signal,
           onTime: (sec) => {
             report(sec / totalDuration);
@@ -686,7 +687,9 @@ export class PipelineRunner {
       if (!st.ok)
         throw new AppError('TTS_ENGINE_UNAVAILABLE', `The "${provider.engine}" voice engine is not ready.`, { hint: st.message, retryable: true });
       const voices = await provider.listVoices();
-      if (voices.length && !voices.some((v) => v.id === s.tts.voice))
+      // A multi-speaker Piper model is listed per speaker ("bn_BD-google-medium:4811"); its plain id
+      // ("bn_BD-google-medium", saved by projects made before) still reads with the default speaker.
+      if (voices.length && !voices.some((v) => v.id === s.tts.voice || v.id.startsWith(`${s.tts.voice}:`)))
         throw new AppError('TTS_VOICE_NOT_FOUND', `The voice "${s.tts.voice}" is not installed for ${provider.engine}.`, {
           hint: `Available voices: ${voices.slice(0, 12).map((v) => v.id).join(', ')}…`,
           retryable: false,

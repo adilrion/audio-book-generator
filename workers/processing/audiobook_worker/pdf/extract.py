@@ -325,6 +325,34 @@ def repair_lines_with_ocr(page: fitz.Page, data: dict, setup: tuple[str, str]) -
     return fixed
 
 
+_LATIN = re.compile(r"[A-Za-z]")
+# A whole Bangla word (letters, signs, joiners) with its trailing punctuation.
+_BANGLA_WORD = re.compile(r"[\u0985-\u09b9\u09bc-\u09cd\u09ce\u09d7\u09dc-\u09df\u0981-\u0983\u200c\u200d]+[,;:।!?\"'”’)]*")
+
+
+def reread_latin_words(page: fitz.Page, data: dict, setup: tuple[str, str]) -> int:
+    """Tesseract's Bangla model sometimes reads a hard Bangla word as Latin letters ("কুণ্ডলায়িত" →
+    "FATS"). OCR each short Latin word of an OCR'd Bangla page once more on its own and keep the result
+    only if it is a single, well-formed Bangla word. Real English words come back in Latin and stay."""
+    fixed = 0
+    for b in data["blocks"]:
+        for ln in b["lines"]:
+            for w in ln["words"]:
+                t = w["t"]
+                if not _LATIN.search(t) or len(re.sub(r"[^A-Za-z]", "", t)) > 6 or _BENGALI.search(t):
+                    continue
+                r = fitz.Rect(w["b"])
+                pad = r.height * 0.3
+                try:
+                    found = _ocr_words(page, (setup[0], "ben"), fitz.Rect(r.x0 - pad, r.y0 - pad, r.x1 + pad, r.y1 + pad) & page.rect)
+                except Exception:  # noqa: BLE001
+                    continue
+                if len(found) == 1 and _BANGLA_WORD.fullmatch(found[0][1]) and not damaged_word(found[0][1]):
+                    w["t"] = found[0][1]
+                    fixed += 1
+    return fixed
+
+
 def _tessdata_dirs() -> list[str]:
     """Tesseract's own language data first (so English OCR does not change when the Bangla pack is
     added), then storage/models/tessdata from `scripts/download-models.sh bangla`."""
@@ -372,6 +400,8 @@ def _page_work(page: fitz.Page, data: dict, work: str, setup: tuple[str, str], b
             tp = page.get_textpage_ocr(flags=TEXT_FLAGS, language=setup[1], dpi=300 if bangla else 200, full=True, tessdata=setup[0])
             data = extract_page(page, textpage=tp, ocr=True, size_from_height=bangla)
             data["ocr"] = info["ocr"] = True
+            if bangla:
+                info["repaired"] = reread_latin_words(page, data, setup)
         except Exception as e:  # noqa: BLE001
             info["error"] = f"OCR failed on page {page.number + 1}: {e}"
     elif work == "repair":

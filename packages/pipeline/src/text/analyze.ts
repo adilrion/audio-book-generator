@@ -12,7 +12,7 @@ import { restoreSectionOpenings } from './dropcaps';
 import { regionsFor, wordBoxes } from './regions';
 import { splitSentences } from './sentences';
 
-export const ANALYZER_VERSION = 'analyze-v5';
+export const ANALYZER_VERSION = 'analyze-v6';
 
 export interface CleanResult {
   pages: CleanPage[];
