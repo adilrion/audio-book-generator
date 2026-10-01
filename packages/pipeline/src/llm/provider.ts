@@ -8,6 +8,10 @@ export interface LLMRequest {
   /** JSON schema the answer must satisfy (Ollama structured outputs). */
   schema: Record<string, unknown>;
   maxTokens?: number;
+  /** 0 (default) for checkable answers; higher for creative writing such as publishing metadata. */
+  temperature?: number;
+  /** Fixed seed for reproducible sampling (Ollama `seed`). */
+  seed?: number;
 }
 
 export interface LLMProvider {

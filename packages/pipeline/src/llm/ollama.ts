@@ -46,7 +46,7 @@ export class OllamaProvider implements LLMProvider {
         think: false,
         format: req.schema,
         keep_alive: '10m',
-        options: { temperature: 0, num_ctx: 8192, num_predict: req.maxTokens ?? 2048 },
+        options: { temperature: req.temperature ?? 0, num_ctx: 8192, num_predict: req.maxTokens ?? 2048, ...(req.seed !== undefined ? { seed: req.seed } : {}) },
         messages: [...(req.system ? [{ role: 'system', content: req.system }] : []), { role: 'user', content: req.prompt }],
       }),
     }).catch((e) => {

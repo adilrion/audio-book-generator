@@ -28,7 +28,7 @@ export interface ProjectDetail extends ProjectSummary {
 
 export interface OutputFile {
   name: string;
-  kind: 'video' | 'audio' | 'subtitles' | 'timeline';
+  kind: 'video' | 'audio' | 'subtitles' | 'timeline' | 'image';
   size: number;
   url: string;
 }
