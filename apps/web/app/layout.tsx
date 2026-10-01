@@ -9,8 +9,8 @@ import { AppStateProvider } from '@/components/app-state';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: { default: 'Read-Along Studio', template: '%s · Read-Along Studio' },
-  description: 'Local-first PDF → read-along audiobook video generator for Apple Silicon.',
+  title: { default: 'ario', template: '%s · ario' },
+  description: 'ario — local-first PDF → read-along audiobook video generator for Apple Silicon.',
 };
 
 export const viewport: Viewport = {

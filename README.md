@@ -1,4 +1,4 @@
-# PDF Audiobook — read-along audiobook videos from PDF books, fully local
+# ario — read-along audiobook videos from PDF books, fully local
 
 Turn a PDF book into a **YouTube-ready read-along video**: the original PDF pages on screen, a natural
 local voice reading the book, and the sentence being spoken highlighted on the page as the narration

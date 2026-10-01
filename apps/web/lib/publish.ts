@@ -54,7 +54,7 @@ export function kitText(draft: PublishDraft, ctx: PublishContext): string {
   const rule = '─'.repeat(48);
   const section = (title: string, body: string) => `${title}\n${rule}\n${body.trim()}\n`;
   const out = [
-    `${ctx.title}${ctx.author ? ` — ${ctx.author}` : ''}\nUpload kit · Read-Along Studio\n`,
+    `${ctx.title}${ctx.author ? ` — ${ctx.author}` : ''}\nUpload kit · ario\n`,
     section('TITLE', yt.title),
     section('DESCRIPTION', composeDescription(yt, ctx.chapters)),
     section('TAGS (paste into the Tags field)', yt.tags.join(', ')),

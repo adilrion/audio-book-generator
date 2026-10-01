@@ -23,13 +23,13 @@ export function isTypingTarget(t: EventTarget | null) {
 
 function Logo() {
   return (
-    <Link href="/" className="group flex items-center gap-2.5 rounded-lg outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="Read-Along Studio — library">
+    <Link href="/" className="group flex items-center gap-2.5 rounded-lg outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="ario — library">
       <span className="grid size-8 place-items-center rounded-[10px] bg-brand text-brand-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.45),0_1px_2px_rgb(110_70_0/0.3)] transition-transform group-hover:-rotate-3">
         <BookAudio className="size-[18px]" aria-hidden />
       </span>
       <span className="grid leading-none">
-        <span className="font-serif text-[17px] font-semibold tracking-tight">Read-Along</span>
-        <span className="mt-0.5 text-[10px] font-medium tracking-[0.18em] text-muted-foreground uppercase">Studio · Local</span>
+        <span className="font-serif text-[17px] font-semibold tracking-tight">ario</span>
+        <span className="mt-0.5 text-[10px] font-medium tracking-[0.18em] text-muted-foreground uppercase">Audiobooks · Local</span>
       </span>
     </Link>
   );
