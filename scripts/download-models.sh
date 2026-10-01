@@ -8,26 +8,32 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/download-models.sh [piper] [ollama] [all]     (or: pnpm setup:models [...])
+Usage: bash scripts/download-models.sh [piper] [bangla] [ollama] [all]     (or: pnpm setup:models [...])
 
   (no argument)   Kokoro-82M v1.0 ONNX model + voices (default TTS engine, ~355 MB)
   piper           also the Piper voice en_US-lessac-medium (~63 MB; needs: pnpm setup:python --piper)
+  bangla          also Bangla audiobooks: the Piper voice bn_BD-google-medium (16 speakers, ~77 MB;
+                  needs: pnpm setup:python --piper) and Tesseract's Bangla + English OCR data
+                  (tessdata_best, ~26 MB) for scanned or garbled Bangla PDFs (PyMuPDF has the OCR engine built in)
   ollama          also `ollama pull $OLLAMA_MODEL` (default qwen3:4b; needs a running Ollama)
   all             everything above
 
-Target paths follow .env: KOKORO_MODEL_PATH, KOKORO_VOICES_PATH, PIPER_MODEL_DIR, OLLAMA_MODEL.
+Target paths follow .env: KOKORO_MODEL_PATH, KOKORO_VOICES_PATH, PIPER_MODEL_DIR, TESSDATA_DIR, OLLAMA_MODEL.
 EOF
 }
 
 WANT_PIPER=0
+WANT_BANGLA=0
 WANT_OLLAMA=0
 while [ $# -gt 0 ]; do
   case "$1" in
     kokoro) ;; # always included
     piper) WANT_PIPER=1 ;;
+    bangla | bn) WANT_BANGLA=1 ;;
     ollama) WANT_OLLAMA=1 ;;
     all)
       WANT_PIPER=1
+      WANT_BANGLA=1
       WANT_OLLAMA=1
       ;;
     -h | --help)
@@ -46,10 +52,14 @@ done
 KOKORO_BASE="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 PIPER_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
 PIPER_VOICE="en_US-lessac-medium"
+PIPER_BN_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/bn/bn_BD/google/medium"
+PIPER_BN_VOICE="bn_BD-google-medium"
+TESSDATA_BASE="https://github.com/tesseract-ocr/tessdata_best/raw/main"
 
 KOKORO_MODEL="$(abs_path "$(env_get KOKORO_MODEL_PATH ./storage/models/kokoro/kokoro-v1.0.onnx)")"
 KOKORO_VOICES="$(abs_path "$(env_get KOKORO_VOICES_PATH ./storage/models/kokoro/voices-v1.0.bin)")"
 PIPER_DIR="$(abs_path "$(env_get PIPER_MODEL_DIR ./storage/models/piper)")"
+TESS_DIR="$(abs_path "$(env_get TESSDATA_DIR ./storage/models/tessdata)")"
 OLLAMA_MODEL="$(env_get OLLAMA_MODEL qwen3:4b)"
 
 # Minimum plausible sizes. The real files are 325.5 MB / 28.2 MB / ~63 MB; anything much
@@ -58,6 +68,9 @@ MIN_KOKORO_MODEL=300000000
 MIN_KOKORO_VOICES=25000000
 MIN_PIPER_ONNX=40000000
 MIN_PIPER_JSON=1000
+# tessdata_best: ben.traineddata is 11.0 MB, eng.traineddata 15.4 MB.
+MIN_TESS_BEN=9000000
+MIN_TESS_ENG=12000000
 # A custom KOKORO_*_PATH may point to another variant (e.g. an int8 model) — only check presence.
 MIN_CUSTOM=1000000
 
@@ -148,22 +161,42 @@ fetch "$KOKORO_BASE/kokoro-v1.0.onnx" "$KOKORO_MODEL" \
 fetch "$KOKORO_BASE/voices-v1.0.bin" "$KOKORO_VOICES" \
   "$(min_for "$KOKORO_VOICES" voices-v1.0.bin "$MIN_KOKORO_VOICES")" "Kokoro voices (voices-v1.0.bin)" || FAILED=1
 
+# fetch_piper_voice BASE_URL VOICE — the .onnx model and its .onnx.json config.
+fetch_piper_voice() {
+  local base="$1" voice="$2"
+  fetch "$base/$voice.onnx" "$PIPER_DIR/$voice.onnx" "$MIN_PIPER_ONNX" "Piper voice ($voice.onnx)" || return 1
+  fetch "$base/$voice.onnx.json" "$PIPER_DIR/$voice.onnx.json" "$MIN_PIPER_JSON" "Piper voice config ($voice.onnx.json)" || return 1
+  if ! grep -q '"phoneme_id_map"' "$PIPER_DIR/$voice.onnx.json"; then
+    err "$PIPER_DIR/$voice.onnx.json is not a Piper voice config. Delete it and re-run."
+    return 1
+  fi
+}
+
+check_piper_package() {
+  local vpy
+  vpy="$(abs_path "$(env_get PYTHON_BIN ./workers/processing/.venv/bin/python)")"
+  if [ -x "$vpy" ] && ! "$vpy" -c 'import piper' >/dev/null 2>&1; then
+    warn "The piper-tts Python package is not installed yet. Run: pnpm setup:python --piper"
+  fi
+}
+
 # ── Piper (optional TTS) ─────────────────────────────────────────────────────
 if [ "$WANT_PIPER" = 1 ]; then
   step "Piper voice $PIPER_VOICE (optional TTS engine)"
-  fetch "$PIPER_BASE/$PIPER_VOICE.onnx" "$PIPER_DIR/$PIPER_VOICE.onnx" "$MIN_PIPER_ONNX" "Piper voice ($PIPER_VOICE.onnx)" || FAILED=1
-  if fetch "$PIPER_BASE/$PIPER_VOICE.onnx.json" "$PIPER_DIR/$PIPER_VOICE.onnx.json" "$MIN_PIPER_JSON" "Piper voice config ($PIPER_VOICE.onnx.json)"; then
-    if ! grep -q '"phoneme_id_map"' "$PIPER_DIR/$PIPER_VOICE.onnx.json"; then
-      err "$PIPER_DIR/$PIPER_VOICE.onnx.json is not a Piper voice config. Delete it and re-run."
-      FAILED=1
-    fi
-  else
-    FAILED=1
-  fi
-  VPY="$(abs_path "$(env_get PYTHON_BIN ./workers/processing/.venv/bin/python)")"
-  if [ -x "$VPY" ] && ! "$VPY" -c 'import piper' >/dev/null 2>&1; then
-    warn "The piper-tts Python package is not installed yet. Run: pnpm setup:python --piper"
-  fi
+  fetch_piper_voice "$PIPER_BASE" "$PIPER_VOICE" || FAILED=1
+  check_piper_package
+fi
+
+# ── Bangla (Piper voice + OCR language data) ─────────────────────────────────
+if [ "$WANT_BANGLA" = 1 ]; then
+  step "Bangla narration: Piper voice $PIPER_BN_VOICE (16 speakers)"
+  fetch_piper_voice "$PIPER_BN_BASE" "$PIPER_BN_VOICE" || FAILED=1
+  check_piper_package
+
+  step "Bangla OCR: Tesseract language data (ben + eng) → $TESS_DIR"
+  # Most Bangla PDFs need OCR: legacy Bijoy fonts and broken text layers are read from the page images.
+  fetch "$TESSDATA_BASE/ben.traineddata" "$TESS_DIR/ben.traineddata" "$MIN_TESS_BEN" "Tesseract Bangla (ben.traineddata)" || FAILED=1
+  fetch "$TESSDATA_BASE/eng.traineddata" "$TESS_DIR/eng.traineddata" "$MIN_TESS_ENG" "Tesseract English (eng.traineddata)" || FAILED=1
 fi
 
 # ── Ollama model (optional LLM) ──────────────────────────────────────────────

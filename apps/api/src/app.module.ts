@@ -9,9 +9,10 @@ import { QueueService } from './queue/queue.service';
 import { PerformanceService } from './system/performance.service';
 import { PythonService } from './system/python.service';
 import { SystemController } from './system/system.controller';
+import { VoicePreviewController } from './system/voice-preview.controller';
 
 @Module({
-  controllers: [ProjectsController, SystemController],
+  controllers: [ProjectsController, SystemController, VoicePreviewController],
   providers: [configProvider, PrismaService, QueueService, PythonService, PerformanceService, ProjectsService, { provide: APP_FILTER, useClass: UserErrorFilter }],
 })
 export class AppModule {}

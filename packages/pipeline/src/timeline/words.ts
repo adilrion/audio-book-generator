@@ -17,18 +17,25 @@ export interface TimedWord {
   end: number;
 }
 
-const norm = (w: string) => w.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+// Latin accents are dropped ("café" ≈ "cafe"); other marks are letters' vowels (Bangla "কি" ≠ "কে").
+const norm = (w: string) =>
+  w
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
 
-/** Abbreviations and initials: the full stop is not a pause ("Mr. Hargreaves", "J. R. R."). */
-const ABBREVIATION = /^(?:mr|mrs|ms|dr|st|jr|sr|prof|rev|gen|capt|col|lt|sgt|vs|etc|no|vol|fig|p|pp|ch)\.$|^(?:\p{L}\.)+$/iu;
+/** Abbreviations and initials: the full stop is not a pause ("Mr. Hargreaves", "J. R. R.", Bangla "ডা."). */
+const ABBREVIATION = /^(?:mr|mrs|ms|dr|st|jr|sr|prof|rev|gen|capt|col|lt|sgt|vs|etc|no|vol|fig|p|pp|ch)\.$|^(?:\p{L}\p{M}*\.)+$/iu;
 
 /** Relative time it takes to say `w`, in "characters". The sentence's last word gets no pause (it is trimmed off the audio). */
 export function speechWeight(w: string, last = false): number {
-  const spoken = w.replace(/[^\p{L}\p{N}]+/gu, '').length;
+  // Vowel signs are spoken sounds (Bangla "ভালোবাসি" ≈ 8); a hasanta (্) or nukta (়) is not.
+  const spoken = w.replace(/[^\p{L}\p{M}\p{N}]+|[\u09bc\u09cd]/gu, '').length;
   if (!spoken) return 0.5;
   let pause = 0;
   if (/[,;:)\]”’"']$/u.test(w)) pause = /[;:]$/.test(w) ? 4 : 2.5;
-  if (/[.!?…]["'”’)\]]*$/u.test(w)) pause = 5;
+  if (/[.!?…।॥]["'”’)\]]*$/u.test(w)) pause = 5;
   if (/[—–-]$/u.test(w)) pause = 2;
   if (last || ABBREVIATION.test(w)) pause = 0;
   // Digits are read as words ("1920" → "nineteen twenty") and take longer than their length.

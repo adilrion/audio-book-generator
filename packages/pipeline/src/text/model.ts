@@ -30,7 +30,8 @@ export interface CleanPage {
   lines: Line[];
 }
 
-export const TERMINAL = /[.!?…]["'”’)\]]*$/;
+/** Sentence-final punctuation, incl. the Bangla danda (।) and double danda (॥). */
+export const TERMINAL = /[.!?…।॥]["'”’)\]]*$/;
 export const LOWER_START = /^["'“‘(\[]?\p{Ll}/u;
 
 export function median(values: number[]): number {

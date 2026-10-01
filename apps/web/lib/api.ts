@@ -2,6 +2,7 @@ import type {
   ChapterEdit,
   ChapterSummary,
   HealthReport,
+  LanguageCode,
   PerformancePrefs,
   PerformanceStatus,
   OutputFile,
@@ -132,10 +133,18 @@ export interface VoicesResponse {
   voices: VoiceInfo[];
 }
 
+export interface LanguageDefaults {
+  engine: TTSEngineName;
+  voices: Partial<Record<TTSEngineName, string>>;
+  engines: TTSEngineName[];
+}
+
 export interface SystemConfig {
   defaults: ProjectSettings;
   engines: TTSEngineName[];
   defaultVoices: Partial<Record<TTSEngineName, string>>;
+  /** Per project language: the starting engine, the recommended voice per engine and the engines that can read it. */
+  languageDefaults?: Partial<Record<LanguageCode, LanguageDefaults>>;
   llm: { enabled: boolean; model: string };
   maxUploadMb: number;
 }
@@ -178,6 +187,10 @@ export const outputUrl = (id: string, name: string, opts: { inline?: boolean; v?
 };
 
 export const pageImageUrl = (id: string, page: number) => `${API_URL}/projects/${encodeURIComponent(id)}/pages/${page}/image`;
+
+/** A few seconds of a voice (WAV), read at the given speed; the sample is in the voice's own language. */
+export const voicePreviewUrl = (engine: string, voice: string, speed: number, language: string) =>
+  `${API_URL}/system/voices/preview?${new URLSearchParams({ engine, voice, speed: speed.toFixed(2), language })}`;
 
 export interface UploadHandle {
   promise: Promise<ProjectDetail>;

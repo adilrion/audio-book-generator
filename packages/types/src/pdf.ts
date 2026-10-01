@@ -64,6 +64,8 @@ export interface ExtractionMeta {
   /** 1-based pages with no usable text (and not OCRed). */
   emptyPages: number[];
   ocrPages: number[];
+  /** 1-based Bangla pages whose text layer is garbled (legacy font, broken ToUnicode) and could not be OCRed. */
+  garbledPages?: number[];
   /** path of pages.jsonl relative to the extraction dir */
   pagesFile: string;
   /** [width, height] in points, index = page - 1 */

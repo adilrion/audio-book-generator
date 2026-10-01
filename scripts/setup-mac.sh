@@ -17,7 +17,7 @@ Does, in order (skipping anything already done):
   4. pnpm install
   5. docker compose up -d postgres redis, waits until healthy, prisma migrate deploy
   6. Python worker venv (scripts/setup-python.sh)
-  7. models: Kokoro TTS (+ Piper voice, + Ollama model) (scripts/download-models.sh)
+  7. models: Kokoro TTS (+ Piper voice, + Bangla voice and OCR data, + Ollama model) (scripts/download-models.sh)
   8. builds the TypeScript packages, CLI and API
   9. runs the doctor (dependency check)
 
@@ -25,6 +25,8 @@ Options:
   --no-ollama      Skip Ollama and the LLM model (the pipeline then uses rules only)
   --no-ocr         Skip Tesseract (OCR for scanned PDFs)
   --with-piper     Also install the optional Piper TTS engine + en_US-lessac-medium voice
+  --with-bangla    Also set up Bangla audiobooks: Piper + the bn_BD-google-medium voice and
+                   Tesseract's Bangla OCR data (implies --with-piper; needs OCR, so not with --no-ocr)
   --skip-brew      Do not install anything with Homebrew (only report what is missing)
   --skip-infra     Do not start Docker (Postgres/Redis) or run database migrations
                    (the CLI works without them; the API and web UI need them)
@@ -42,6 +44,7 @@ EOF
 WITH_OLLAMA=1
 WITH_OCR=1
 WITH_PIPER=0
+WITH_BANGLA=0
 SKIP_BREW=0
 SKIP_INFRA=0
 SKIP_PYTHON=0
@@ -54,6 +57,10 @@ while [ $# -gt 0 ]; do
     --no-ollama) WITH_OLLAMA=0 ;;
     --no-ocr) WITH_OCR=0 ;;
     --with-piper) WITH_PIPER=1 ;;
+    --with-bangla)
+      WITH_BANGLA=1
+      WITH_PIPER=1
+      ;;
     --skip-brew) SKIP_BREW=1 ;;
     --skip-infra) SKIP_INFRA=1 ;;
     --skip-python) SKIP_PYTHON=1 ;;
@@ -290,6 +297,7 @@ if [ "$SKIP_MODELS" = 1 ]; then
 else
   model_args=""
   [ "$WITH_PIPER" = 1 ] && model_args="piper"
+  [ "$WITH_BANGLA" = 1 ] && model_args="$model_args bangla"
   # shellcheck disable=SC2086
   bash "$ROOT/scripts/download-models.sh" $model_args || note "Model download incomplete — re-run: pnpm setup:models $model_args"
 

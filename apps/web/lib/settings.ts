@@ -56,7 +56,11 @@ export function validateSettings(s: ProjectSettings): string | undefined {
     if (r.from > r.to) return 'The first chapter must not be after the last chapter.';
   }
   if (!s.tts.voice) return 'Choose a voice.';
-  if (s.language === 'bn') return 'Bangla narration is coming soon.';
+  if (s.language === 'bn') {
+    if (s.tts.engine === 'kokoro') return 'Kokoro has no Bangla voices. Choose Piper and a Bangla voice.';
+    // Piper ids start with the language ("bn_BD-google-medium:4811"); an English voice cannot read Bangla.
+    if (s.tts.engine === 'piper' && !/^bn[_-]/.test(s.tts.voice)) return 'Choose a Bangla voice. Install it with: bash scripts/download-models.sh bangla';
+  }
   return undefined;
 }
 

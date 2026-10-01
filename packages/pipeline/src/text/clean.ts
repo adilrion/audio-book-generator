@@ -1,12 +1,15 @@
 import type { CleaningReport, ExtractedPage, Rect } from '@app/types';
+import { repairBanglaWord } from './bangla';
+import { fixDropCapLines, folioBands, inFolioBand, marginZone } from './furniture';
 import { type CleanPage, type Line, type Token } from './model';
 
-const PAGE_NUMBER = /^[\s\-–—|•·]*[[{(]?(page\s+)?(\d{1,4}|[ivxlcdm]{1,7})(\s*(of|\/)\s*\d{1,4})?[\]})]?[\s\-–—|•·]*$/i;
+/** Page numbers in ASCII or Bangla digits ("১২", "পৃষ্ঠা ১২", "১২ / ৩০০"). */
+const PAGE_NUMBER = /^[\s\-–—|•·]*[[{(]?(page\s+|পৃষ্ঠা\s*[:ঃ]?\s*|পৃ[.ঃ]\s*)?([\d০-৯]{1,4}|[ivxlcdm]{1,7})(\s*(of|\/)\s*[\d০-৯]{1,4})?[\]})]?[\s\-–—|•·]*$/iu;
 /** A bare (bracketed) number: "12", "{xii}", "[28]" — printed page references, line numbers, figure ticks. */
-const NUMBER_ONLY = /^[[{(]?(\d{1,4}|[ivxlcdm]{1,7})[\]})]?$/i;
+const NUMBER_ONLY = /^[[{(]?([\d০-৯]{1,4}|[ivxlcdm]{1,7})[\]})]?$/iu;
 /** A drop cap: one big capital (optionally after an opening quote) or a lone opening quote. */
 const DROP_CAP = /^(["'“‘(]?\p{Lu}|["'“‘])$/u;
-const TOC_LEADER = /(\.\s*){4,}\s*\d{1,4}\s*$|(…\s*){2,}\s*\d{1,4}\s*$/;
+const TOC_LEADER = /(\.\s*){4,}\s*[\d০-৯]{1,4}\s*$|(…\s*){2,}\s*[\d০-৯]{1,4}\s*$/u;
 
 function iou(a: Rect, b: Rect): number {
   const x0 = Math.max(a[0], b[0]);
@@ -23,9 +26,9 @@ function iou(a: Rect, b: Rect): number {
 export function headerKey(text: string): string {
   return text
     .toLowerCase()
-    .replace(/\d+/g, '#')
+    .replace(/[\d০-৯]+/g, '#')
     .replace(/\b[ivxlcdm]{1,7}\b/g, '#')
-    .replace(/[^\p{L}#]+/gu, ' ')
+    .replace(/[^\p{L}\p{M}#]+/gu, ' ') // \p{M}: Bangla vowel signs belong to the word
     .trim();
 }
 
@@ -57,7 +60,7 @@ export function toCleanPages(pages: ExtractedPage[]): { pages: CleanPage[]; remo
             removedDuplicates++;
             continue;
           }
-          const t = w.t.replace(/\u00ad(?!$)/g, '').replace(/[\u200b\ufeff]/g, ''); // keep a final soft hyphen: it marks a sure join
+          const t = repairBanglaWord(w.t.replace(/\u00ad(?!$)/g, '').replace(/[\u200b\ufeff]/g, '')); // keep a final soft hyphen: it marks a sure join
           if (t) tokens.push({ t, parts: [{ page: p.page, b: w.b }] });
         }
         if (!tokens.length) continue;
@@ -120,12 +123,18 @@ export function cleanPages(extracted: ExtractedPage[]): { pages: CleanPage[]; re
   const { pages, removedDuplicates } = toCleanPages(extracted);
   const body = bodyFontSize(pages);
   const n = pages.length;
-  for (const p of pages) mergeDropCaps(p, body);
+  for (const p of pages) {
+    mergeDropCaps(p, body);
+    fixDropCapLines(p, body);
+  }
+  const strong = n <= 4 ? 2 : Math.max(3, Math.ceil(n * 0.2));
 
+  // Margin zones reach as far into the page as the book prints its page numbers. Only arabic numerals at
+  // about body size teach the band: roman numerals and big digits are as often chapter numbers.
+  const bands = folioBands(pages, (l) => PAGE_NUMBER.test(l.text) && /[\d০-৯]/.test(l.text) && l.size <= body * 1.15, strong);
   const zoneOf = (p: CleanPage, l: Line): 'top' | 'bottom' | null => {
-    const zone = Math.max(36, p.height * 0.09);
-    if (l.b[3] <= zone) return 'top';
-    if (l.b[1] >= p.height - zone) return 'bottom';
+    if (l.b[3] <= marginZone(p, bands.top, body)) return 'top';
+    if (l.b[1] >= p.height - marginZone(p, bands.bottom, body)) return 'bottom';
     return null;
   };
 
@@ -139,7 +148,6 @@ export function cleanPages(extracted: ExtractedPage[]): { pages: CleanPage[]; re
       counts.get(key)!.add(p.page);
     }
 
-  const strong = n <= 4 ? 2 : Math.max(3, Math.ceil(n * 0.2));
   const removedHeaders = new Set<string>();
   const removedFooters = new Set<string>();
   let removedPageNumbers = 0;
@@ -158,6 +166,11 @@ export function cleanPages(extracted: ExtractedPage[]): { pages: CleanPage[]; re
       const z = zoneOf(p, l);
       if (!z) return true;
       if (PAGE_NUMBER.test(l.text) && l.size <= body * 1.15) {
+        removedPageNumbers++;
+        return false;
+      }
+      // A page number OCR misread ("3B", "nm", "a") or sized oddly, right where the book prints them.
+      if (l.tokens.length === 1 && l.text.length <= 4 && l.size <= body * 1.6 && inFolioBand(p, l, bands[z], z)) {
         removedPageNumbers++;
         return false;
       }

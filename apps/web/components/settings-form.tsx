@@ -45,13 +45,14 @@ import { Segmented, SegmentedItem } from '@/components/ui/segmented';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+import { VoicePreview } from '@/components/voice-preview';
 import { useApi } from '@/hooks/use-api';
 import { api, type SystemConfig } from '@/lib/api';
 import { highlightStyleCss, tintStyleCss } from '@/lib/highlight';
 import { splitHint } from '@/lib/hint';
 import { cloneSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
-import { ENGINE_LABELS, groupVoices, pickVoice, voiceMeta } from '@/lib/voices';
+import { ENGINE_LABELS, defaultVoiceFor, groupVoices, pickVoice, voiceMeta } from '@/lib/voices';
 
 // ─────────────────────────────── options ───────────────────────────────
 
@@ -387,7 +388,7 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
   const [replaced, setReplaced] = useState<{ from: string; to: string }>();
   useEffect(() => {
     if (!list.length || list.some((v) => v.id === currentVoice)) return;
-    const next = pickVoice(list, config?.defaultVoices?.[engine], settings.language);
+    const next = pickVoice(list, defaultVoiceFor(config, engine, settings.language), settings.language);
     if (next && next !== currentVoice) {
       setReplaced(currentVoice ? { from: currentVoice, to: next } : undefined);
       update((d) => void (d.tts.voice = next));
@@ -395,6 +396,7 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [list, currentVoice, engine]);
   const replacedNote = replaced && replaced.to === currentVoice ? replaced : undefined;
+  const selectedVoice = list.some((v) => v.id === currentVoice) ? currentVoice : undefined;
 
   const unavailable = voices.data && voices.data.engine === engine && !voices.data.available;
   const install = unavailable ? splitHint(voices.data?.message) : undefined;
@@ -409,7 +411,7 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
           onValueChange={(e) =>
             update((d) => {
               d.tts.engine = e as TTSEngineName;
-              d.tts.voice = config?.defaultVoices?.[e as TTSEngineName] ?? '';
+              d.tts.voice = defaultVoiceFor(config, e as TTSEngineName, d.language) ?? '';
             })
           }
           className={cn('grid gap-2', engines.length >= 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}
@@ -434,28 +436,30 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
         htmlFor={voiceId}
         className="sm:max-w-md"
       >
-        <Select value={list.some((v) => v.id === currentVoice) ? currentVoice : undefined} disabled={disabled || !list.length} onValueChange={(v) => update((d) => void (d.tts.voice = v))}>
-          <SelectTrigger id={voiceId} className="h-10">
-            <SelectValue placeholder={voices.loading ? 'Loading voices…' : unavailable ? 'Engine not installed' : currentVoice || 'Choose a voice'} />
-          </SelectTrigger>
-          <SelectContent className="max-h-80">
-            {groups.map((g, gi) => (
-              <SelectGroup key={g.language}>
-                {gi > 0 && <SelectSeparator />}
-                <SelectLabel>
-                  {g.label}
-                  {g.language !== settings.language && gi > 0 && groups[0]?.language === settings.language ? ' · other language' : ''}
-                </SelectLabel>
-                {g.voices.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    <span className="shrink-0 font-medium">{v.name}</span>
-                    {voiceMeta(v) && <span className="min-w-0 truncate text-muted-foreground">{voiceMeta(v)}</span>}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ))}
-          </SelectContent>
-        </Select>
+        <VoicePreview engine={engine} voice={selectedVoice} speed={settings.tts.speed} language={settings.language} disabled={disabled}>
+          <Select value={selectedVoice} disabled={disabled || !list.length} onValueChange={(v) => update((d) => void (d.tts.voice = v))}>
+            <SelectTrigger id={voiceId} className="h-10">
+              <SelectValue placeholder={voices.loading ? 'Loading voices…' : unavailable ? 'Engine not installed' : currentVoice || 'Choose a voice'} />
+            </SelectTrigger>
+            <SelectContent className="max-h-80">
+              {groups.map((g, gi) => (
+                <SelectGroup key={g.language}>
+                  {gi > 0 && <SelectSeparator />}
+                  <SelectLabel>
+                    {g.label}
+                    {g.language !== settings.language && gi > 0 && groups[0]?.language === settings.language ? ' · other language' : ''}
+                  </SelectLabel>
+                  {g.voices.map((v) => (
+                    <SelectItem key={v.id} value={v.id}>
+                      <span className="shrink-0 font-medium">{v.name}</span>
+                      {voiceMeta(v) && <span className="min-w-0 truncate text-muted-foreground">{voiceMeta(v)}</span>}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        </VoicePreview>
         {replacedNote && (
           <p className="flex items-start gap-1.5 text-xs text-muted-foreground" role="status">
             <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
@@ -550,14 +554,28 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
       {/* ── Narration ── */}
       <FormSection id="narration" step={step(1)} icon={<Mic />} title="Narration" description="Local text-to-speech — nothing leaves your Mac.">
         <Field label="Language" htmlFor={ids.lang} className="sm:max-w-md">
-          <Select value={value.language} onValueChange={(l) => update((d) => void (d.language = l as ProjectSettings['language']))}>
+          <Select
+            value={value.language}
+            onValueChange={(l) =>
+              update((d) => {
+                d.language = l as ProjectSettings['language'];
+                // Each language has its own voices: Bangla is read by Piper's Bangla voice, not Kokoro.
+                const lang = config?.languageDefaults?.[d.language];
+                if (lang && !lang.engines.includes(d.tts.engine)) d.tts.engine = lang.engine;
+                d.tts.voice = defaultVoiceFor(config, d.tts.engine, d.language) ?? '';
+              })
+            }
+          >
             <SelectTrigger id={ids.lang} className="h-10">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="en">English</SelectItem>
-              <SelectItem value="bn" disabled>
-                Bangla <span className="text-muted-foreground">— coming soon</span>
+              <SelectItem value="bn">
+                Bangla{' '}
+                <span className="text-muted-foreground" lang="bn">
+                  বাংলা
+                </span>
               </SelectItem>
             </SelectContent>
           </Select>

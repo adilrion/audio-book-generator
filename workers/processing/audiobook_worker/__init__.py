@@ -6,4 +6,4 @@ the orchestrator runs a small, bounded pool of processes to control memory use.
 """
 
 VERSION = "0.1.0"
-EXTRACTOR_VERSION = "extract-v1"
+EXTRACTOR_VERSION = "extract-v2"

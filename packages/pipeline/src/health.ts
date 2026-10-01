@@ -9,6 +9,8 @@ interface PySystemInfo {
   python: string;
   pymupdf: string;
   tesseract: boolean;
+  ocrBangla?: boolean;
+  banglaVoices?: number;
   tts: Record<string, { available: boolean; message: string }>;
 }
 
@@ -37,6 +39,21 @@ export async function checkLocalEnvironment(cfg: AppConfig): Promise<HealthCheck
       required: false,
       message: info.tesseract ? 'available for scanned PDFs' : 'not installed — scanned PDFs cannot be read',
       fix: info.tesseract ? undefined : 'brew install tesseract',
+    });
+    const bnVoices = info.banglaVoices ?? 0;
+    checks.push({
+      name: 'Bangla narration (Piper voice)',
+      ok: bnVoices > 0,
+      required: false,
+      message: bnVoices > 0 ? `${bnVoices} Bangla voices (bn_BD-google-medium)` : 'not installed — Bangla books cannot be narrated',
+      fix: bnVoices > 0 ? undefined : info.tts.piper?.available ? 'bash scripts/download-models.sh bangla' : 'pnpm setup:python --piper && bash scripts/download-models.sh bangla',
+    });
+    checks.push({
+      name: 'Bangla OCR (Tesseract ben)',
+      ok: !!info.ocrBangla,
+      required: false,
+      message: info.ocrBangla ? 'available for scanned and garbled Bangla PDFs' : 'not installed — most Bangla PDFs need OCR (Bijoy fonts, broken text layers)',
+      fix: info.ocrBangla ? undefined : 'bash scripts/download-models.sh bangla',
     });
   } catch (e) {
     checks.push({ name: 'Python worker', ok: false, required: true, message: (e as Error).message, fix: 'pnpm setup:python' });

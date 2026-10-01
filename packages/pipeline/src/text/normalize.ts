@@ -2,6 +2,8 @@
  * Deterministic narration preparation. The printed text is never modified; this only
  * changes what the TTS engine is asked to say.
  */
+import { isBangla, normalizeBanglaNarration } from './bangla';
+
 const EN_REPLACEMENTS: [RegExp, string][] = [
   [/\be\.\s?g\.,?/gi, 'for example,'],
   [/\bi\.\s?e\.,?/gi, 'that is,'],
@@ -48,7 +50,7 @@ export function normalizeNarration(text: string, lang: string, lexicon: Record<s
     .replace(/[​﻿]/g, '')
     .replace(/[“”„]/g, '"')
     .replace(/[‘’‚]/g, "'")
-    .replace(/\[\d{1,3}\]|(?<=[A-Za-z\u00C0-\u024F][.,;!?"'])\d{1,3}(?=\s|$)/g, '') // footnote markers: word.12 / [3]
+    .replace(/\[[\d০-৯]{1,3}\]|(?<=[A-Za-z\u00C0-\u024F][.,;!?"'])\d{1,3}(?=\s|$)/g, '') // footnote markers: word.12 / [3]
     .replace(/https?:\/\/\S+/g, (u) => u.replace(/^https?:\/\//, '').replace(/\/$/, ''))
     .replace(/\s*[—–]\s*/g, ', ')
     .replace(/…/g, '...')
@@ -58,6 +60,7 @@ export function normalizeNarration(text: string, lang: string, lexicon: Record<s
     for (const [re, rep] of EN_REPLACEMENTS) s = s.replace(re, rep);
     s = chapterNumerals(s);
   }
+  if (isBangla(lang)) s = normalizeBanglaNarration(s);
   for (const [word, say] of Object.entries(lexicon)) {
     const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     s = s.replace(new RegExp(`(?<![\\p{L}])${esc}(?![\\p{L}])`, 'gu'), say);
@@ -65,10 +68,10 @@ export function normalizeNarration(text: string, lang: string, lexicon: Record<s
   return s.replace(/,\s*,/g, ',').replace(/\s+([,.;:!?])/g, '$1').replace(/^,\s*/, '').trim();
 }
 
-/** Headings get a full stop so TTS uses falling (final) intonation. */
-export function headingNarration(text: string): string {
+/** Headings get a full stop (a danda in Bangla) so TTS uses falling (final) intonation. */
+export function headingNarration(text: string, lang = 'en'): string {
   const t = text.trim();
-  return /[.!?:]$/.test(t) ? t : `${t}.`;
+  return /[.!?:।॥]$/.test(t) ? t : `${t}${isBangla(lang) ? '।' : '.'}`;
 }
 
 export function isSpeakable(text: string): boolean {

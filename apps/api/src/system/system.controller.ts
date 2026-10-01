@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Inject, Put, Query } from '@nestjs/common';
-import { DEFAULT_VOICES, checkLocalEnvironment, createTTSProvider, ttsEngineNames } from '@app/pipeline';
+import { DEFAULT_VOICES, LANGUAGE_DEFAULTS, checkLocalEnvironment, createTTSProvider, ttsEngineNames } from '@app/pipeline';
 import { DEFAULT_SETTINGS, type HealthCheck, type HealthReport, type VoiceInfo } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { badRequest } from '../common/errors';
@@ -65,6 +65,8 @@ export class SystemController {
       defaults: { ...DEFAULT_SETTINGS, tts: { ...DEFAULT_SETTINGS.tts, engine: this.cfg.TTS_ENGINE, voice: this.cfg.TTS_DEFAULT_VOICE } },
       engines: ttsEngineNames(),
       defaultVoices: DEFAULT_VOICES,
+      /** Per project language: starting engine, recommended voice per engine, engines that can read it. */
+      languageDefaults: LANGUAGE_DEFAULTS,
       llm: { enabled: this.cfg.LLM_ENABLED, model: this.cfg.OLLAMA_MODEL },
       maxUploadMb: this.cfg.MAX_UPLOAD_MB,
     };

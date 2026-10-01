@@ -83,8 +83,9 @@
 }
 
 @theme inline {
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-serif: 'Newsreader Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, ui-serif, serif;
+  /* Bangla glyphs: macOS Kohinoor Bangla / Bangla Sangam MN, else Noto. */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Kohinoor Bangla', 'Noto Sans Bengali', sans-serif;
+  --font-serif: 'Newsreader Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, 'Bangla Sangam MN', 'Noto Serif Bengali', ui-serif, serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 
   --color-background: var(--background);

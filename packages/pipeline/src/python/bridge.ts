@@ -80,6 +80,7 @@ export class PythonProcess {
           KOKORO_VOICES_PATH: this.cfg.KOKORO_VOICES_PATH,
           KOKORO_PROVIDER: this.cfg.KOKORO_PROVIDER,
           PIPER_MODEL_DIR: this.cfg.PIPER_MODEL_DIR,
+          TESSDATA_DIR: this.cfg.TESSDATA_DIR,
           ...this.env,
         },
         stdio: ['pipe', 'pipe', 'pipe'],

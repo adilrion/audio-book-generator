@@ -27,12 +27,13 @@ const STRONG_PREFIXES = new Set([
 const HYPHEN_END = /[-\u2010\u2011]$/;
 const SOFT_HYPHEN = '\u00ad';
 /** "Revolu-" at a line end (a hyphen right after a letter, any hyphen flavour). */
-const BROKEN_END = /\p{L}[-\u2010\u2011\u00ad]$/u;
+const BROKEN_END = /[\p{L}\p{M}][-\u2010\u2011\u00ad]$/u;
 
 /** First token of a list item: bullet, "1.", "(a)", "iv)". */
 const LIST_MARKER = /^([•◦▪‣∙·●○■□*–]|\(?(\d{1,2}|[a-z]|[ivx]{1,4})[.)])$/;
 
-const wordKey = (s: string) => s.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+// \p{M}: a Bangla word may end in a vowel sign ("বাড়ি").
+const wordKey = (s: string) => s.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, '');
 
 /** Words printed whole in the document. Line-break fragments ("com-" / "pleteness") are left out. */
 export function buildVocabulary(pages: CleanPage[]): Set<string> {
@@ -63,12 +64,16 @@ export function dehyphenate(a: string, b: string, vocab: Set<string>, autoHyphen
   if (!(HYPHEN_END.test(a) || soft) || a.length < 2) return null;
   if (/^[-–—\u2010\u2011]+$/.test(a)) return null;
   const stem = a.slice(0, -1);
-  if (!/\p{L}$/u.test(stem)) return null;
+  if (!/[\p{L}\p{M}]$/u.test(stem)) return null;
   if (soft) return stem + b;
   if (autoHyphen) return a.endsWith(autoHyphen) ? stem + b : `${stem}-${b}`;
-  if (!LOWER_START.test(b)) return `${stem}-${b}`; // "anti-" + "American"
   const joined = wordKey(stem + b);
   const hyph = wordKey(`${stem}-${b}`);
+  // Scripts without letter case (Bangla): no capital to go by, and books rarely break words at a
+  // line end, while hyphenated pairs are common ("দেওয়া-নেওয়া"). Join only what the book prints joined.
+  const first = /\p{L}/u.exec(b)?.[0];
+  if (first && first.toLowerCase() === first.toUpperCase()) return vocab.has(joined) && !vocab.has(hyph) ? stem + b : `${stem}-${b}`;
+  if (!LOWER_START.test(b)) return `${stem}-${b}`; // "anti-" + "American"
   if (vocab.has(joined)) return stem + b;
   if (vocab.has(hyph)) return `${stem}-${b}`;
   const lastPart = wordKey(stem.split(/[-\u2010\u2011]/).pop() ?? stem);
@@ -81,7 +86,7 @@ export function dehyphenate(a: string, b: string, vocab: Set<string>, autoHyphen
 /** U+2010 is this document's automatic-hyphenation mark if it ends several lines. */
 function detectAutoHyphen(lines: Line[]): string | undefined {
   let n = 0;
-  for (const l of lines) if (/\p{L}\u2010$/u.test(l.tokens[l.tokens.length - 1]?.t ?? '') && ++n >= 3) return '\u2010';
+  for (const l of lines) if (/[\p{L}\p{M}]\u2010$/u.test(l.tokens[l.tokens.length - 1]?.t ?? '') && ++n >= 3) return '\u2010';
   return undefined;
 }
 

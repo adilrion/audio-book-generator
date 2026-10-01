@@ -1,8 +1,10 @@
 import type { Analysis, Chapter, ChapterSource, CleaningReport, ExtractedPage, ExtractionMeta, Paragraph, Sentence } from '@app/types';
 import { mapLimit, type Logger, silentLogger } from '@app/shared';
 import type { LLMHelper } from '../llm/helper';
+import { orphanSignWords, sectionTitle } from './bangla';
 import { detectChapters, fallbackSections, isFrontMatterTitle, paraText, type ChapterStart } from './chapters';
 import { cleanPages } from './clean';
+import { isSectionNumber } from './furniture';
 import type { CleanPage, Token } from './model';
 import { headingNarration, isSpeakable, normalizeNarration } from './normalize';
 import { buildParagraphs, buildVocabulary, type RawParagraph } from './paragraphs';
@@ -10,7 +12,7 @@ import { restoreSectionOpenings } from './dropcaps';
 import { regionsFor, wordBoxes } from './regions';
 import { splitSentences } from './sentences';
 
-export const ANALYZER_VERSION = 'analyze-v4';
+export const ANALYZER_VERSION = 'analyze-v5';
 
 export interface CleanResult {
   pages: CleanPage[];
@@ -43,6 +45,8 @@ export function looksBroken(text: string): boolean {
   const odd = text.replace(/[\p{L}\p{M}\p{N}\p{Z}\p{P}$%&+=<>|~^`°§¶©®™±×÷€£¥¢\u2010-\u2015\u200c\u200d]/gu, '').length;
   if (letters >= 20 && odd / letters > 0.08) return true;
   if (tokens.filter((t) => /^\p{L}{26,}$/u.test(t)).length >= 2) return true; // glued words
+  // Bangla words starting with a vowel sign ("িতীয়"): a conjunct lost by the PDF's text layer.
+  if (orphanSignWords(text) >= 2) return true;
   return false;
 }
 
@@ -59,13 +63,16 @@ function joinTokens(tokens: Token[]): { text: string; offsets: number[] } {
 
 function buildSentences(p: RawParagraph, ci: number, pi: number, lang: string, lexicon: Record<string, string>): Sentence[] {
   const { text, offsets } = joinTokens(p.tokens);
+  // A bare section or page number ("I", "Ul" for an OCR'd II, a stray "27") still marks a chapter start,
+  // but is not read out or highlighted.
+  if (isSectionNumber(text)) return [];
   const spans = p.kind === 'heading' ? [{ start: 0, end: text.length }] : splitSentences(text, lang);
   const out: Sentence[] = [];
   for (const span of spans) {
     const toks = p.tokens.filter((t, k) => offsets[k] < span.end && offsets[k] + t.t.length > span.start);
     const st = text.slice(span.start, span.end).trim();
     if (!toks.length || !isSpeakable(st)) continue;
-    const narration = p.kind === 'heading' ? headingNarration(normalizeNarration(st, lang, lexicon)) : normalizeNarration(st, lang, lexicon);
+    const narration = p.kind === 'heading' ? headingNarration(normalizeNarration(st, lang, lexicon), lang) : normalizeNarration(st, lang, lexicon);
     if (!isSpeakable(narration)) continue;
     out.push({ id: `c${ci}-p${pi}-s${out.length}`, index: 0, text: st, narration, regions: regionsFor(toks), words: wordBoxes(toks) });
   }
@@ -97,18 +104,18 @@ export async function analyzeCleaned(clean: CleanResult, meta: ExtractionMeta, o
   if (starts.length < 2) {
     const lastPage = paras[paras.length - 1].pageEnd;
     if (lastPage - paras[0].pageStart >= 18) {
-      starts = fallbackSections(paras);
+      starts = fallbackSections(paras, 12, opts.language);
       source = 'fallback';
       warnings.push('No chapter structure found; the book was split into parts of about 12 pages.');
     } else if (!starts.length) {
-      starts = [{ paraIndex: 0, title: opts.title || meta.title || 'Full Text' }];
+      starts = [{ paraIndex: 0, title: opts.title || meta.title || sectionTitle('full', opts.language) }];
       source = 'fallback';
     }
   }
   starts.sort((a, b) => a.paraIndex - b.paraIndex);
 
   // Front matter before the first chapter
-  if (starts[0].paraIndex > 0 && !opts.skipFrontMatter) starts.unshift({ paraIndex: 0, title: 'Opening Pages' });
+  if (starts[0].paraIndex > 0 && !opts.skipFrontMatter) starts.unshift({ paraIndex: 0, title: sectionTitle('opening', opts.language) });
   if (opts.skipFrontMatter) {
     const kept = starts.filter((s) => !isFrontMatterTitle(s.title));
     if (kept.length) starts = kept;

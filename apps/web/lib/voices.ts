@@ -1,4 +1,5 @@
-import type { TTSEngineName, VoiceInfo } from '@app/types';
+import type { LanguageCode, TTSEngineName, VoiceInfo } from '@app/types';
+import type { SystemConfig } from './api';
 
 export const ENGINE_LABELS: Record<TTSEngineName, { name: string; description: string }> = {
   kokoro: { name: 'Kokoro', description: 'Natural neural voices (recommended)' },
@@ -107,10 +108,16 @@ export function groupVoices(voices: VoiceInfo[], preferred: string): VoiceGroup[
         (a, b) =>
           (voiceAccent(a) ?? '').localeCompare(voiceAccent(b) ?? '') ||
           (a.gender ? genderOrder[a.gender] : 3) - (b.gender ? genderOrder[b.gender] : 3) ||
-          a.name.localeCompare(b.name),
+          a.name.localeCompare(b.name, undefined, { numeric: true }),
       ),
     }))
     .sort((a, b) => (a.language === preferred ? -1 : b.language === preferred ? 1 : a.label.localeCompare(b.label)));
+}
+
+/** Recommended voice for an engine in a project language ("bn" → Piper's Bangla voice), from GET /system/config. */
+export function defaultVoiceFor(config: Pick<SystemConfig, 'defaultVoices' | 'languageDefaults'> | undefined, engine: TTSEngineName, language: string): string | undefined {
+  const lang = config?.languageDefaults?.[language as LanguageCode];
+  return lang ? lang.voices[engine] : config?.defaultVoices?.[engine];
 }
 
 /** Best voice for an engine: the configured default if installed, else the first voice in the project language. */

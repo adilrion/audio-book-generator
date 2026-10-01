@@ -7,7 +7,9 @@ const ABBREVIATIONS: Record<string, string[]> = {
     'gen', 'col', 'capt', 'lt', 'sgt', 'gov', 'sen', 'rep', 'hon', 'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug',
     'sep', 'sept', 'oct', 'nov', 'dec', 'u.s', 'u.k', 'a.m', 'p.m', 'approx', 'est', 'dept', 'univ', 'ave', 'blvd',
   ],
-  bn: [],
+  // Bangla has no letter case, so every abbreviation is 'strong'. Sentences end with a danda (।);
+  // a full stop is almost always an abbreviation: "ডা. রহমান", "মো. করিম", "খ্রি.".
+  bn: ['ডা', 'ড', 'মো', 'মোহা', 'মি', 'মিসেস', 'খ্রি', 'খ্রিস্টপূর্ব', 'পৃ', 'বি', 'দ্র', 'নং', 'সা', 'রা', 'রহ', 'অধ্যা', 'প্রফে', 'ইঞ্জি', 'এম', 'এস', 'এল', 'এন', 'এফ', 'আর', 'এইচ', 'ইউ', 'এক্স'],
 };
 
 /** Abbreviations that practically never end a sentence (merge even before a capital letter). */
@@ -31,10 +33,12 @@ function segmenter(lang: string): Intl.Segmenter {
 
 /** 'strong' = never ends a sentence; 'weak' = ends one unless the next word is lowercase. */
 function abbreviationAtEnd(s: string, lang: string): 'strong' | 'weak' | null {
-  const m = /(?:^|[\s(\["'“‘])([\p{L}.]+)\.\s*$/u.exec(s.trimEnd());
+  // \p{M}: Bangla vowel signs are marks ("ডা." is ড + া).
+  const m = /(?:^|[\s(\["'“‘])([\p{L}\p{M}.]+)\.\s*$/u.exec(s.trimEnd());
   if (!m) return null;
   const w = m[1].toLowerCase().replace(/\.$/, '');
   if (/^\p{Lu}$/u.test(m[1])) return 'strong'; // initials: "J. R. R. Tolkien"
+  if (lang === 'bn' && (/^\p{L}\p{M}*$/u.test(m[1]) || ABBREVIATIONS.bn.includes(w))) return 'strong'; // "এ. কে. ফজলুল হক"
   if (lang === 'en' && NEVER_TERMINAL.has(w)) return 'strong';
   return (ABBREVIATIONS[lang] ?? ABBREVIATIONS.en).includes(w) ? 'weak' : null;
 }

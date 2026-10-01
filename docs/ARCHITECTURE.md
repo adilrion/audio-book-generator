@@ -127,9 +127,10 @@ Errors are classified at the source: `PDF_CORRUPT`, `PDF_UNSUPPORTED`, `PDF_PASS
 | Body font size | The most common font size, weighted by characters, rounded to 0.5 pt |
 | Overprinted duplicates ("fake bold") | Same word or line at the same place (IoU > 0.7) is dropped |
 | Soft hyphens, zero-width characters | Normalized or removed |
-| Header/footer zones | Only lines entirely within the top or bottom `max(36 pt, 9 % of page height)` are candidates |
+| Header/footer zones | Only lines entirely within the top or bottom `max(36 pt, 9 % of page height)` are candidates. The zone is widened to take in the book's own page-number band (`text/furniture.ts`): where number-only lines (arabic digits, ≤ 1.15 × body) line up within 6 pt on at least `max(3, 20 % of pages)` pages, in the outer quarter of the page. Scans and ebook layouts often print the folio and running footer well inside the page (*The Metamorphosis*: 70 pt above the bottom of a 484 pt page) |
 | Running headers/footers | A line's *header key* replaces digits and roman numerals with `#` and strips punctuation, so "Chapter 3 — The Mill 47" and "Chapter 3 — The Mill 48" match. It is removed if the same key appears in the same zone on at least `max(3, 20 % of pages)` pages (2 pages for books of 4 pages or fewer), or on ≥ 3 pages when the line is short (≤ 12 words) and not larger than body text |
-| Page numbers | In a margin zone: `12`, `xii`, `- 12 -`, `Page 12`, `12 of 300`, `12/300` |
+| Page numbers | In a margin zone: `12`, `xii`, `- 12 -`, `Page 12`, `12 of 300`, `12/300`. In the learned page-number band, also any lone token of ≤ 4 characters up to 1.6 × body: OCR misreads a folio as `3B`, `nm`, `a` |
+| OCR'd drop-cap lines | OCR gives a line that starts with a drop cap the drop cap's height (14 pt in a 9 pt book). When the next line starts inside it, indented beside the letter, the line takes the body size, so it stays in its paragraph instead of becoming a heading |
 | TOC leader lines | `Introduction ........ 7` anywhere on the page |
 
 The cleaning report (counts and the first removed header texts) is kept in the analysis and shown
@@ -177,6 +178,8 @@ so the Bangla danda `।` works) and then repairs its known weaknesses:
 
 Headings are one "sentence" each and get a trailing full stop in the narration so the voice uses
 falling intonation.
+
+A paragraph that is nothing but a section or page number (`I`, `II.`, `12`, `§ 3`, and OCR's `Ul`/`Il` for II/III) is neither narrated nor highlighted (`isSectionNumber`): read aloud, `I.` sounds like the pronoun. It still counts for chapter detection, and the chapter title keeps the number. Roman numerals must be well formed and below 400, so `MILD` or `mix` stay text.
 
 `text/normalize.ts` changes only the narration: typographic quotes, footnote markers (`word.12`,
 `[3]`), dashes → commas, URLs without the scheme, and for English `e.g.` → "for example", `i.e.`

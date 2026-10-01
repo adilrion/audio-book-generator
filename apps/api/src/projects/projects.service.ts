@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, type Document, type JobStatus, type Project } from '@prisma/client';
-import { CachePaths, chaptersSignature, cleanProjectCache, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, type OutputRecord, type ProjectManifest } from '@app/pipeline';
+import { CachePaths, LANGUAGE_DEFAULTS, chaptersSignature, cleanProjectCache, defaultVoice, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, isOpeningPagesTitle, voiceLanguage, type OutputRecord, type ProjectManifest } from '@app/pipeline';
 import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
 import {
   ASPECT_SIZES,
@@ -132,8 +132,17 @@ export class ProjectsService {
     }
     if (p.video?.aspectRatio && !p.video.width) Object.assign(p.video, ASPECT_SIZES[p.video.aspectRatio]);
     const merged = resolveSettings(p, base);
-    if (merged.language === 'bn' && merged.tts.engine === 'kokoro')
-      throw badRequest('Bangla narration needs a Bangla-capable TTS voice, which is not installed yet.', 'See README → "How to add another TTS model".');
+    // Switching the language without choosing a voice: move to that language's recommended voice
+    // (an English voice cannot read Bangla, and the reverse).
+    const lang = LANGUAGE_DEFAULTS[merged.language];
+    if (p.language && !p.tts?.engine && !lang.engines.includes(merged.tts.engine)) merged.tts = { ...merged.tts, engine: lang.engine, voice: defaultVoice(lang.engine, merged.language) ?? merged.tts.voice };
+    else if (p.language && !p.tts?.voice && voiceLanguage(merged.tts.voice) && voiceLanguage(merged.tts.voice) !== merged.language)
+      merged.tts = { ...merged.tts, voice: defaultVoice(merged.tts.engine, merged.language) ?? merged.tts.voice };
+    if (!lang.engines.includes(merged.tts.engine))
+      throw badRequest(
+        `The ${merged.tts.engine} voice engine cannot narrate ${merged.language === 'bn' ? 'Bangla' : 'this language'}.`,
+        merged.language === 'bn' ? 'Choose the Piper engine with a Bangla voice. Install it with: bash scripts/download-models.sh bangla' : `Choose one of: ${lang.engines.join(', ')}.`,
+      );
     return merged;
   }
 
@@ -463,7 +472,7 @@ async function rmOutputsKeepNothing(dir: string) {
 
 /** Front matter = the opening chapter before the first real one; back matter = licence, index… */
 function chapterMatter(title: string, i: number, n: number): ChapterSummary['matter'] {
-  if (i === 0 && n > 1 && (title === 'Opening Pages' || isFrontMatterTitle(title))) return 'front';
+  if (i === 0 && n > 1 && (isOpeningPagesTitle(title) || isFrontMatterTitle(title))) return 'front';
   if (isBackMatterTitle(title)) return 'back';
   return undefined;
 }

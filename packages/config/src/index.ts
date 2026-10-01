@@ -41,6 +41,8 @@ const schema = z.object({
   KOKORO_PROVIDER: z.enum(['cpu', 'coreml']).default('cpu'),
   PIPER_MODEL_DIR: z.string().default('./storage/models/piper'),
   TTS_SAMPLE_RATE: int(24000),
+  /** Tesseract language data downloaded by `scripts/download-models.sh bangla` (Bangla OCR). Tesseract's own folder is used too. */
+  TESSDATA_DIR: z.string().default('./storage/models/tessdata'),
 
   VIDEO_ENCODER: z.string().default('auto'),
   VIDEO_BITRATE: z.string().default('6M'),
@@ -100,6 +102,7 @@ export function loadConfig(overrides: Partial<RawEnv> = {}, opts: { reload?: boo
     KOKORO_MODEL_PATH: abs(env.KOKORO_MODEL_PATH),
     KOKORO_VOICES_PATH: abs(env.KOKORO_VOICES_PATH),
     PIPER_MODEL_DIR: abs(env.PIPER_MODEL_DIR),
+    TESSDATA_DIR: abs(env.TESSDATA_DIR),
     MAX_CONCURRENT_TTS: Math.max(1, env.MAX_CONCURRENT_TTS),
     MAX_CONCURRENT_PDF_RENDER: Math.max(1, env.MAX_CONCURRENT_PDF_RENDER),
     MAX_CONCURRENT_LLM: Math.max(1, env.MAX_CONCURRENT_LLM),

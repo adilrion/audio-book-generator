@@ -174,8 +174,28 @@ describe('ProjectsService.create', () => {
   it('rejects Bangla with the Kokoro engine', async () => {
     const t = setup();
     const { file, hash } = upload();
-    await expect(t.svc.create(file, JSON.stringify({ language: 'bn' }))).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('Bangla') });
+    await expect(t.svc.create(file, JSON.stringify({ language: 'bn', tts: { engine: 'kokoro' } }))).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('Bangla'),
+    });
     expect(stored(hash)).toBe(false);
+  });
+
+  it('gives a Bangla project the Bangla Piper voice when no engine is chosen', async () => {
+    const t = setup();
+    const { file } = upload();
+    const p = await t.svc.create(file, JSON.stringify({ language: 'bn' }));
+    expect(p.settings.language).toBe('bn');
+    expect(p.settings.tts).toMatchObject({ engine: 'piper', voice: 'bn_BD-google-medium:4811' });
+  });
+
+  it('keeps the engine but swaps an English voice for a Bangla one when only the language changes', async () => {
+    const t = setup();
+    const { file } = upload();
+    const p = await t.svc.create(file, JSON.stringify({ language: 'bn', tts: { engine: 'piper' } }));
+    expect(p.settings.tts).toMatchObject({ engine: 'piper', voice: 'bn_BD-google-medium:4811' });
+    const kept = await t.svc.create(upload().file, JSON.stringify({ language: 'bn', tts: { engine: 'piper', voice: 'bn_BD-google-medium:rm' } }));
+    expect(kept.settings.tts.voice).toBe('bn_BD-google-medium:rm');
   });
 });
 

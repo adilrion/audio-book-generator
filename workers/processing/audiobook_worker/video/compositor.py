@@ -7,6 +7,7 @@ identical consecutive frames are detected and reused without recomputation.
 from __future__ import annotations
 
 import os
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -34,6 +35,29 @@ FONT_CANDIDATES = [
     "/Library/Fonts/Arial.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
+# Fonts with Bangla glyphs (they cover Latin letters and digits too). Pillow shapes the conjuncts
+# and vowel signs with libraqm.
+BANGLA_FONT_CANDIDATES = [
+    "/System/Library/Fonts/KohinoorBangla.ttc",
+    "/System/Library/Fonts/Supplemental/Bangla Sangam MN.ttc",
+    "/System/Library/Fonts/Supplemental/Bangla MN.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansBengali-Regular.ttf",
+]
+_BENGALI = re.compile(r"[\u0980-\u09ff]")
+
+
+def title_font_candidates(text: str) -> list[str]:
+    return BANGLA_FONT_CANDIDATES + FONT_CANDIDATES if _BENGALI.search(text) else FONT_CANDIDATES
+
+
+def shorten(text: str, limit: int = 70) -> str:
+    """Cut a long title at a word boundary, so a Bangla vowel sign is never cut off its letter."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 3]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > limit // 2 else cut).rstrip(" ,;:-—") + "…"
 
 
 def hex_to_bgr(h: str) -> tuple[int, int, int]:
@@ -267,7 +291,7 @@ class ChapterCompositor:
 
         size = int(30 * self.ui)
         font = None
-        for f in FONT_CANDIDATES:
+        for f in title_font_candidates(self.ch_title):
             if os.path.exists(f):
                 try:
                     font = ImageFont.truetype(f, size)
@@ -276,7 +300,7 @@ class ChapterCompositor:
                     continue
         if font is None:
             font = ImageFont.load_default(size=size)
-        text = self.ch_title if len(self.ch_title) <= 70 else self.ch_title[:67] + "…"
+        text = shorten(self.ch_title)
         tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
         l, t, r, b = tmp.textbbox((0, 0), text, font=font)
         padx, pady = int(26 * self.ui), int(16 * self.ui)

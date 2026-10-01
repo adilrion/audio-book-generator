@@ -4,6 +4,7 @@
  *
  *   pnpm audiobook ./book.pdf
  *   pnpm audiobook ./book.pdf --voice am_michael --chapters 1-2 --out ./output
+ *   pnpm audiobook ./boi.pdf --language bn          (Bangla: Piper voice bn_BD-google-medium)
  *   node apps/cli/dist/main.js doctor | voices | inspect <pdf> | sample <out.pdf>
  */
 import fs from 'node:fs';
@@ -12,12 +13,15 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadConfig } from '@app/config';
 import {
+  DEFAULT_VOICES,
   FileStore,
+  LANGUAGE_DEFAULTS,
   PipelineRunner,
   PythonPool,
   PythonProcess,
   checkLocalEnvironment,
   createTTSProvider,
+  defaultVoice,
 } from '@app/pipeline';
 import { createLogger, describeError, formatBytes, formatDuration, sha256File, toAppError } from '@app/shared';
 import {
@@ -47,8 +51,10 @@ Usage:
 Options for create:
   --out <dir>               Output folder (default: ./output)
   --mode video|audio        Audiobook + animated PDF (default) or audio only
-  --engine kokoro|piper|say TTS engine (default from .env)
-  --voice <id>              Voice id (e.g. af_heart, am_michael, bf_emma)
+  --language en|bn          Language of the book (default en). bn = Bangla, narrated by the Piper voice
+                            bn_BD-google-medium (install: bash scripts/download-models.sh bangla)
+  --engine kokoro|piper|say TTS engine (default from .env; piper for Bangla)
+  --voice <id>              Voice id (e.g. af_heart, am_michael, bf_emma, bn_BD-google-medium:4811)
   --speed <n>               Speech speed 0.5–2.0 (default 1.0)
   --aspect 16:9|9:16|1:1    Video format (default 16:9)
   --fps <n>                 Frames per second (default 30)
@@ -70,7 +76,7 @@ Options for create:
   --skip-front-matter       Skip content before the first chapter
   --keep-back-matter        Also narrate trailing licence/index/about-the-author chapters
   --no-llm                  Do not use the local LLM (Ollama)
-  --ocr auto|off|force      OCR for scanned pages (needs tesseract)
+  --ocr auto|off|force      OCR for scanned pages (needs tesseract; Bangla: also for garbled text)
   --password <pw>           Password for protected PDFs
   --power <mode>            silent | quiet | balanced | fast (default: balanced; quiet on battery)
                             silent = efficiency cores only, quiet ≈ 2 cores, balanced ≈ 4 cores
@@ -129,6 +135,7 @@ async function cmdCreate(args: string[]) {
     options: {
       out: { type: 'string' },
       mode: { type: 'string' },
+      language: { type: 'string' },
       engine: { type: 'string' },
       voice: { type: 'string' },
       speed: { type: 'string' },
@@ -166,6 +173,7 @@ async function cmdCreate(args: string[]) {
   const oneOf = (flag: string, value: string | undefined, allowed: string[]) => {
     if (value !== undefined && !allowed.includes(value)) throw new Error(`--${flag} must be one of: ${allowed.join(', ')}`);
   };
+  oneOf('language', values.language, ['en', 'bn']);
   oneOf('highlight', values.highlight, ['sentence', 'paragraph', 'word', 'cursor']);
   oneOf('highlight-style', values['highlight-style'], ['marker', 'underline', 'box']);
   oneOf('page-fit', values['page-fit'], ['auto', 'width', 'text']);
@@ -183,12 +191,18 @@ async function cmdCreate(args: string[]) {
   const frameRadius = px('frame-radius', 0, 200);
   const cfg = values.power ? loadConfig({ PERFORMANCE_MODE: values.power as 'balanced' }) : loadConfig();
   const log = createLogger('cli', values.verbose ? 'debug' : 'warn');
-  const engine = (values.engine ?? cfg.TTS_ENGINE) as ProjectSettings['tts']['engine'];
+  const language = (values.language ?? 'en') as ProjectSettings['language'];
+  // A Bangla book needs a Bangla voice: the .env default engine/voice are for English.
+  const engine = (values.engine ?? (language === 'en' ? cfg.TTS_ENGINE : LANGUAGE_DEFAULTS[language].engine)) as ProjectSettings['tts']['engine'];
+  if (!LANGUAGE_DEFAULTS[language].engines.includes(engine)) throw new Error(`--engine ${engine} cannot narrate Bangla. Use --engine piper (bash scripts/download-models.sh bangla).`);
+  const voice = values.voice ?? (language === 'en' && engine === cfg.TTS_ENGINE ? cfg.TTS_DEFAULT_VOICE : (defaultVoice(engine, language) ?? (language === 'en' ? DEFAULT_VOICES[engine] : undefined)));
+  if (!voice) throw new Error(`Choose a Bangla voice with --voice (list them: audiobook voices --engine ${engine}).`);
   const partial: DeepPartial<ProjectSettings> = {
     outputMode: values.mode === 'audio' ? 'audiobook_only' : 'audiobook_video',
+    language,
     tts: {
       engine,
-      voice: values.voice ?? (engine === cfg.TTS_ENGINE ? cfg.TTS_DEFAULT_VOICE : (await import('@app/pipeline')).DEFAULT_VOICES[engine]),
+      voice,
       speed: values.speed ? Number(values.speed) : 1,
     },
     text: {

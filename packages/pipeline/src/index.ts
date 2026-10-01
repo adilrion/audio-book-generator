@@ -1,5 +1,6 @@
 export * from './python/bridge';
 export * from './text/model';
+export * from './text/bangla';
 export * from './text/clean';
 export * from './text/paragraphs';
 export * from './text/sentences';

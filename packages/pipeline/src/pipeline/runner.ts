@@ -53,7 +53,7 @@ import { CachePaths, type ProjectManifest } from './paths';
 import { PerformanceController, machineInfo, type PoolRole } from './performance';
 import type { OutputRecord, PipelineStore } from './store';
 
-export const EXTRACT_VERSION = 'extract-v1';
+export const EXTRACT_VERSION = 'extract-v2';
 export const TTS_VERSION = 'tts-v1';
 export const RENDER_VERSION = 'render-v1';
 
@@ -368,7 +368,8 @@ export class PipelineRunner {
         await assertDiskSpace(this.cfg.storage.root, (await fileSize(job.pdfPath)) * 3, this.cfg.DISK_RESERVE_GB * 1e9, 'text extraction');
         const m = await mainPool.call<ExtractionMeta>(
           'pdf.extract',
-          { path: job.pdfPath, outDir: exDir, pdfHash: job.pdfHash, ocr: s.text.ocr, ocrLanguage: s.language === 'bn' ? 'ben' : 'eng', password: job.password },
+          // Bangla books quote English words and names: OCR with both scripts (ben alone when eng is missing).
+          { path: job.pdfPath, outDir: exDir, pdfHash: job.pdfHash, ocr: s.text.ocr, ocrLanguage: s.language === 'bn' ? 'ben+eng' : 'eng', password: job.password },
           {
             signal: this.signal,
             onProgress: (p) => {
@@ -377,8 +378,10 @@ export class PipelineRunner {
             },
           },
         );
-        if (m.emptyPages.length > m.pageCount * 0.3)
-          this.warnings.push(`${m.emptyPages.length} pages had no readable text${m.ocrPages.length ? '' : ' (install tesseract for OCR)'}.`);
+        const ocrFix = s.language === 'bn' ? 'install Bangla OCR: bash scripts/download-models.sh bangla' : 'install tesseract for OCR';
+        if (m.emptyPages.length > m.pageCount * 0.3) this.warnings.push(`${m.emptyPages.length} pages had no readable text${m.ocrPages.length ? '' : ` (${ocrFix})`}.`);
+        if (m.garbledPages?.length)
+          this.warnings.push(`${m.garbledPages.length} ${m.garbledPages.length === 1 ? 'page has' : 'pages have'} damaged Bangla text that could not be read by OCR (${ocrFix}).`);
         return { value: m, cached: false, message: `${m.pageCount} pages, ${m.wordCount.toLocaleString()} words` };
       });
       manifest.extractKey = extractKey;
