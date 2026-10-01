@@ -71,15 +71,17 @@ export class VoicePreviewController {
     const provider = createTTSProvider(engine, this.python.pool);
     const st = await provider.isAvailable();
     if (!st.ok) throw badRequest(`This voice engine is not installed.`, st.message);
-    // Only installed voices: the id reaches the engine (Piper turns it into a model path).
-    const info = (await provider.listVoices()).find((v) => v.id === voice);
+    // Only installed voices: the id reaches the engine (Piper turns it into a model path). A multi-speaker
+    // model's plain id ("bn_BD-google-medium") stands for its first speaker, as in the pipeline's voice check.
+    const voices = await provider.listVoices();
+    const info = voices.find((v) => v.id === voice) ?? voices.find((v) => v.id.startsWith(`${voice}:`));
     if (!info) throw notFound('Voice');
 
     const { text, language } = previewText(info.language, projectLanguage);
     // Kokoro picks the right phonemizer from the voice id when asked for 'en' (see kokoro_engine.py).
     const engineLanguage = engine === 'kokoro' ? 'en' : language;
     const sampleRate = this.cfg.TTS_SAMPLE_RATE;
-    const key = hashKey('voice-preview-v1', engine, provider.version, voice, speed, engineLanguage, text, sampleRate);
+    const key = hashKey('voice-preview-v1', engine, provider.version, info.id, speed, engineLanguage, text, sampleRate);
     const file = path.join(this.cfg.storage.audio, 'previews', `${key}.wav`);
     if (fs.existsSync(file)) return file;
 
@@ -87,7 +89,7 @@ export class VoicePreviewController {
     if (!job) {
       job = (async () => {
         await fs.promises.mkdir(path.dirname(file), { recursive: true });
-        await provider.synthesize(text, { voice, speed, language: engineLanguage, sampleRate, outPath: file });
+        await provider.synthesize(text, { voice: info.id, speed, language: engineLanguage, sampleRate, outPath: file });
       })().finally(() => this.pending.delete(key));
       this.pending.set(key, job);
     }

@@ -1,7 +1,7 @@
 'use client';
 
 import type { ProjectDetail } from '@app/types';
-import { BookOpen, CircleCheck, Clock, FileText, Film, Headphones, LayoutList, ListChecks, SlidersHorizontal, Type, X } from 'lucide-react';
+import { BookOpen, CircleCheck, Clock, FileText, Film, Headphones, LayoutList, ListChecks, Rocket, SlidersHorizontal, Type, X } from 'lucide-react';
 import Link from 'next/link';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
@@ -13,6 +13,7 @@ import { BackLink } from '@/components/page-header';
 import { PowerControl } from '@/components/power-control';
 import { ProcessingPanel } from '@/components/processing-panel';
 import { FailureAlert, ProjectActions, useProjectCommands } from '@/components/project-actions';
+import { PublishPanel } from '@/components/publish-panel';
 import { ReadAlongPlayer } from '@/components/read-along-player';
 import { SettingsPanel } from '@/components/settings-panel';
 import { StatusBadge } from '@/components/status-badge';
@@ -128,6 +129,7 @@ export function ProjectView({ id, initialTime, initialTab }: { id: string; initi
   const [tab, setTabState] = useState<ProjectTab | undefined>(initialTab ?? (initialTime !== undefined ? 'listen' : undefined));
   const [previewMode, setPreviewMode] = useState<'readalong' | 'video'>('readalong');
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [publishDirty, setPublishDirty] = useState(false);
 
   const p = project.data;
   const phase = p ? projectPhase(p) : undefined;
@@ -265,6 +267,14 @@ export function ProjectView({ id, initialTime, initialTab }: { id: string; initi
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="publish">
+            <Rocket aria-hidden /> Publish
+            {publishDirty && (
+              <span className="size-1.5 rounded-full bg-info" title="Unsaved changes">
+                <span className="sr-only">(unsaved changes)</span>
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="settings">
             <SlidersHorizontal aria-hidden /> Settings
             {settingsDirty && (
@@ -390,6 +400,10 @@ export function ProjectView({ id, initialTime, initialTab }: { id: string; initi
           ) : (
             <ListenPlaceholder project={p} phase={phase} onStart={openChapterReview} />
           )}
+        </TabsContent>
+
+        <TabsContent value="publish" forceMount className="data-[state=inactive]:hidden">
+          <PublishPanel project={p} phase={phase} onDirtyChange={setPublishDirty} />
         </TabsContent>
 
         <TabsContent value="settings" forceMount className="data-[state=inactive]:hidden">

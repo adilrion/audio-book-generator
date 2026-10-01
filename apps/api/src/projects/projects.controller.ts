@@ -110,11 +110,12 @@ export class ProjectsController implements OnModuleInit, OnModuleDestroy {
     return this.projects.outputs(id);
   }
 
+  /** `as` downloads under another name (e.g. a descriptive file name for the YouTube upload). */
   @Get(':id/output/:name')
-  download(@Param('id') id: string, @Param('name') name: string, @Query('inline') inline: string, @Res() res: Response) {
+  download(@Param('id') id: string, @Param('name') name: string, @Query('inline') inline: string, @Query('as') as: string | undefined, @Res() res: Response) {
     const file = this.projects.outputPath(id, name);
     if (!fs.existsSync(file)) throw notFound('File');
-    if (!inline) res.attachment(name);
+    if (!inline) res.attachment(downloadName(as, name));
     res.sendFile(file, { acceptRanges: true, dotfiles: 'deny' }); // Range support for audio/video seeking
   }
 
@@ -146,3 +147,10 @@ export class ProjectsController implements OnModuleInit, OnModuleDestroy {
   }
 }
 
+/** A requested download name, kept to a plain file name with the original extension. */
+export function downloadName(as: string | undefined, name: string): string {
+  const ext = path.extname(name);
+  const base = typeof as === 'string' ? as.replace(/[\u0000-\u001f\u007f/\\:*?"<>|]+/g, '').trim().replace(/^\.+/, '').slice(0, 150) : '';
+  if (!base) return name;
+  return base.toLowerCase().endsWith(ext.toLowerCase()) ? base : `${base}${ext}`;
+}

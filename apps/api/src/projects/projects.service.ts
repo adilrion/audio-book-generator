@@ -27,7 +27,7 @@ import { QueueService } from '../queue/queue.service';
 import { PythonService } from '../system/python.service';
 import { chapterReviewSchema, settingsSchema } from './settings.schema';
 
-const ACTIVE: JobStatus[] = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
+export const ACTIVE: JobStatus[] = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'];
 /** Project ids are UUIDs; anything with dots or slashes (e.g. "..%2F..") must never reach a file path. */
 const SAFE_ID = /^[a-z0-9-]+$/i;
 type ProjectWithDoc = Project & { document: Document };
@@ -298,6 +298,7 @@ export class ProjectsService {
       ['audiobook.m4a', 'audio'],
       ['subtitles.srt', 'subtitles'],
       ['chapters.txt', 'timeline'],
+      ['thumbnail.jpg', 'image'],
     ];
     for (const [name, kind] of known) {
       const st = await fsp.stat(path.join(dir, name)).catch(() => null);

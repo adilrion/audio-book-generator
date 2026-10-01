@@ -1,7 +1,7 @@
 'use client';
 
 import type { OutputFile } from '@app/types';
-import { Captions, Check, Copy, Download, Film, ListVideo, Music, PackageOpen } from 'lucide-react';
+import { Captions, Check, Copy, Download, Film, ImageIcon, ListVideo, Music, PackageOpen } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useCopy } from '@/hooks/use-copy';
@@ -14,9 +14,10 @@ const META: Record<string, { label: string; description: string; icon: typeof Fi
   'audiobook.m4a': { label: 'Audiobook', description: 'AAC audio with chapter markers', icon: Music, tint: 'bg-info/12 text-info' },
   'subtitles.srt': { label: 'Subtitles', description: 'SRT captions, one cue per sentence', icon: Captions, tint: 'bg-success/12 text-success' },
   'chapters.txt': { label: 'YouTube chapters', description: 'Timestamps to paste into the video description', icon: ListVideo, tint: 'bg-muted text-muted-foreground' },
+  'thumbnail.jpg': { label: 'Thumbnail', description: '1280×720 JPEG for YouTube (made in the Publish tab)', icon: ImageIcon, tint: 'bg-muted text-muted-foreground' },
 };
 
-const ORDER = ['audiobook.mp4', 'audiobook.m4a', 'subtitles.srt', 'chapters.txt'];
+const ORDER = ['audiobook.mp4', 'audiobook.m4a', 'thumbnail.jpg', 'subtitles.srt', 'chapters.txt'];
 
 function CopyChapters({ url }: { url: string }) {
   const { copied, copy } = useCopy();

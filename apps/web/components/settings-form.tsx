@@ -388,6 +388,10 @@ function VoiceFields({ settings, config, disabled, update }: { settings: Project
   const [replaced, setReplaced] = useState<{ from: string; to: string }>();
   useEffect(() => {
     if (!list.length || list.some((v) => v.id === currentVoice)) return;
+    // A multi-speaker Piper model's plain id ("bn_BD-google-medium", saved by older projects) is its
+    // default speaker, listed first: the same voice under its listed id, so nothing to warn about.
+    const speaker = currentVoice ? list.find((v) => v.id.startsWith(`${currentVoice}:`)) : undefined;
+    if (speaker) return void update((d) => void (d.tts.voice = speaker.id));
     const next = pickVoice(list, defaultVoiceFor(config, engine, settings.language), settings.language);
     if (next && next !== currentVoice) {
       setReplaced(currentVoice ? { from: currentVoice, to: next } : undefined);

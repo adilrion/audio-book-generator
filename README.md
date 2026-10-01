@@ -40,6 +40,7 @@ book.pdf  ──►  audiobook.mp4   1920×1080 H.264 + AAC, highlighted pages, 
 - [Processing pipeline](#processing-pipeline)
 - [Storage layout](#storage-layout)
 - [Troubleshooting](#troubleshooting)
+- [Publishing to YouTube and social media](#publishing-to-youtube-and-social-media)
 - [Bangla audiobooks (বাংলা)](#bangla-audiobooks-বাংলা)
 - [Power modes (heat, fan noise and battery)](#power-modes-heat-fan-noise-and-battery)
 - [Performance tuning for a 16 GB Mac](#performance-tuning-for-a-16-gb-mac)
@@ -108,6 +109,11 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   Chapter 7" instead of `ECONNREFUSED 127.0.0.1:6379`. Technical details go to the logs. If a Python
   process dies mid-chapter (for example under memory pressure), that chapter is retried once
   automatically before anything is reported.
+- **Ready to publish.** The Publish tab writes the YouTube title, description, tags, hashtags,
+  pinned comment and social posts with the local AI (or rules when Ollama is off), checks them against
+  YouTube's limits and SEO practice, previews the watch page and search result, designs a 1280×720
+  thumbnail, embeds the metadata and cover art in the MP4/M4A, and hands you an upload kit. See
+  [Publishing](#publishing-to-youtube-and-social-media).
 - **Three ways to use it:** a Next.js dashboard, a NestJS HTTP API with a BullMQ job queue, and a CLI
   that needs no database or Redis.
 
@@ -552,7 +558,7 @@ audiobook and <kbd>/</kbd> in the library to search.
 - **Project page** (`/projects/<id>`): the book's cover, title and author with the action for its
   state (Start, Cancel, Retry, Resume, or Download when finished) and a menu with Review chapters,
   Restart, Clean project cache and Delete project; plain-language errors with the matching retry
-  action. Three tabs (`?tab=` in the address keeps the one you are on):
+  action. Four tabs (`?tab=` in the address keeps the one you are on):
   - **Overview**: live progress per stage and per chapter, the downloads, the power mode while
     processing, the detected chapters, and **Text repairs**: every sentence the local AI fixed,
     as a before → after diff of what the voice reads (the printed text is never changed).
@@ -560,6 +566,8 @@ audiobook and <kbd>/</kbd> in the library to search.
     synced to the audio — it
     works as soon as the narration is ready — and then the final video. `?t=1:23` opens it at that
     moment.
+  - **Publish** (once the video or audiobook exists): YouTube metadata, thumbnail, social posts,
+    file metadata and the upload kit — see [Publishing](#publishing-to-youtube-and-social-media).
   - **Settings**: the same options as for a new book, with a preview and the list of stages a
     change will redo (and reuse) before you save and re-run.
 - **System** (`/system`): every health check with its fix command, and the power mode.
@@ -703,9 +711,15 @@ enqueues a job.
 | `GET /projects/:id/status` | | `ProgressSnapshot` `{status, progress, stage, message, currentChapter, totalChapters, warnings, error}` |
 | `GET /projects/:id/steps` | | `StepRecord[]` (`EXTRACT`, `CLEAN`, `ANALYZE`, `TTS_CHAPTER_n`, `AUDIO_MERGE`, `TIMELINE`, `VIDEO_CHAPTER_n`, `MUX`) |
 | `GET /projects/:id/output` | | `OutputFile[]` `{name, kind, size, url}` |
-| `GET /projects/:id/output/:name` | `?inline=1` to stream inline (for `<audio>`/`<video>`) | File download with HTTP Range support |
+| `GET /projects/:id/output/:name` | `?inline=1` to stream inline (for `<audio>`/`<video>`); `?as=<file name>` to download under another name | File download with HTTP Range support |
 | `GET /projects/:id/timeline` | | `Timeline` JSON (`409 NOT_READY` until audio is done) |
 | `GET /projects/:id/pages/:page/image` | | JPEG render of a PDF page (1.6 px/pt, cached) |
+| `GET /projects/:id/publish` | | `PublishState`: the draft (rule-based until saved), the book's facts and chapter times, the thumbnail, when the metadata was applied and whether the files or draft changed since (`stale`), the tags each file carries now (ffprobe) and the local AI's status |
+| `PUT /projects/:id/publish` | `{ draft: PublishDraft }` | `PublishState`. `400` for an invalid draft. |
+| `POST /projects/:id/publish/generate` | `{ sections: ["youtube", "social"], draft?, options?: { language, tone, keywords } }` | `PublishState` with the sections rewritten by the local AI and saved (20–60 s; closing the request stops the model). `409` when `LLM_ENABLED=false` or nothing is rendered yet, `503` when Ollama is down. |
+| `POST /projects/:id/publish/apply` | | `PublishState`. Writes the file tags and cover art into `audiobook.mp4` / `audiobook.m4a` (stream copy, checked, then swapped in). `409` while queued or processing. |
+| `PUT /projects/:id/publish/thumbnail` | raw JPEG body (`Content-Type: image/jpeg`), ≤ 2 MB | `PublishState`; saved as `thumbnail.jpg` |
+| `DELETE /projects/:id/publish/thumbnail` | | `PublishState` |
 | `DELETE /projects/:id/cache` | | `{ freedBytes }`: clean the project cache (never deletes final outputs). `409` while processing. |
 | `DELETE /projects/:id` | `?deleteOutputs=true` (default `false`) | `{ ok: true, outputsKept }`. Outputs are kept unless requested. The upload is removed only if no other project uses the same PDF. `409` while processing. |
 | `GET /system/health` | `?fresh=1` bypasses the 15 s cache | `HealthReport` `{ok, checks[{name, ok, required, message, fix?}]}`: the doctor's checks plus DB and Redis |
@@ -830,6 +844,7 @@ storage/                                      (STORAGE_DIR)
 ├── output/<projectId>/                       FINAL OUTPUTS (never removed by "clean cache");
 │   │                                         <projectId> is the UUID, or cli-<hash> for CLI runs
 │   ├── audiobook.mp4  audiobook.m4a  subtitles.srt  chapters.txt  timeline.json
+│   ├── publish.json  thumbnail.jpg           Publish tab: metadata draft, when it was applied, thumbnail
 │   ├── manifest.json                         which cache keys this project's outputs were built from
 │   ├── state.json                            CLI projects only (steps + progress)
 │   └── .work/                                concat lists / metadata during a run
@@ -951,6 +966,42 @@ This should not happen. Resume once; if it repeats, run with `--verbose` or `LOG
 open an issue with the log. Restart the project to rebuild every artifact.
 
 ---
+
+## Publishing to YouTube and social media
+
+The **Publish** tab turns a finished book into an upload: everything YouTube Studio and the social
+apps ask for, checked and previewed, plus the metadata embedded in the files themselves.
+
+1. **Draft.** A rule-based draft is always there: title (`<title> by <author> – Full Audiobook…`,
+   fitted to the ~70 characters search shows), description, tags within YouTube's 500-character
+   budget, hashtags, pinned comment and posts for Facebook, Instagram, TikTok, X and LinkedIn — in
+   English or Bangla.
+2. **Generate with AI** (optional) asks the local model for three title ideas, a 150–250-word
+   description, tags, hashtags, category, thumbnail text, pinned comment and the five social posts,
+   from the book's facts, chapter titles and opening text. Choose the language, tone and extra
+   search phrases first. Answers are cleaned (no links, timestamps, `<` `>` or stray hashtags,
+   platform length limits) and anything unusable falls back to the rules. Chapter timestamps are
+   never written by the model; they come from the timeline.
+3. **Edit and check.** Every field has a counter against YouTube's limits; the **SEO checks** score
+   the draft (title length and main phrase near the start, opening line, description length,
+   chapters — YouTube needs 3+ chapters of 10 s+ starting at 00:00 — tags, hashtags, thumbnail,
+   pinned comment, file metadata). Click a check to jump to its field. The preview shows the watch
+   page, a search result (desktop and phone) and each social post.
+4. **Thumbnail.** Four layouts (Cover, Bold, Minimal, Full image) drawn in the browser at 1280×720
+   from the book cover or your own image, with your text, accent colour, author and runtime badge.
+   **Save** stores the exact JPEG (≤ 2 MB).
+5. **Apply to files** writes title, author, album, genre, year, copyright, comment, the description
+   (short and long), the tags as keywords, the audio/subtitle language and cover art (the thumbnail
+   in the MP4, the book cover in the M4A, which is also marked as an audiobook) — without
+   re-encoding. *File metadata* shows what will be written next to what each file carries now. If a
+   later run re-renders the files, the tab says so and you apply again.
+6. **Upload kit.** Downloads named after the book (`the-metamorphosis-franz-kafka-audiobook.mp4`),
+   the thumbnail, the SRT for YouTube's subtitle upload, copy buttons for every field, the upload
+   settings to choose (category, language, audience, visibility, licence, altered-content
+   guidance), and the whole kit as `.txt` or as YouTube Data API–shaped `.json`.
+
+Uploading itself stays manual (YouTube Studio), so no Google account or OAuth app is needed. Only
+publish books that are in the public domain or that you have the rights to.
 
 ## Bangla audiobooks (বাংলা)
 

@@ -26,3 +26,6 @@ export * from './pipeline/runner';
 export * from './pipeline/performance';
 export * from './health';
 export * from './maintenance';
+export * from './publish/template';
+export * from './publish/generate';
+export * from './publish/media';

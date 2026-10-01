@@ -10,6 +10,9 @@ import type {
   ProjectDetail,
   ProjectSettings,
   ProjectSummary,
+  GeneratePublishRequest,
+  PublishDraft,
+  PublishState,
   StepRecord,
   TextRepair,
   Timeline,
@@ -168,6 +171,15 @@ export const api = {
   cleanCache: (id: string) => request<{ freedBytes: number }>(`/projects/${encodeURIComponent(id)}/cache`, { method: 'DELETE' }),
   deleteProject: (id: string, deleteOutputs: boolean) =>
     request<{ ok: boolean; outputsKept: boolean }>(`/projects/${encodeURIComponent(id)}?deleteOutputs=${deleteOutputs ? 'true' : 'false'}`, { method: 'DELETE' }),
+  publish: (id: string, signal?: AbortSignal) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish`, { signal }),
+  savePublish: (id: string, draft: PublishDraft) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish`, json('PUT', { draft })),
+  /** Local AI writing; can take a minute. Aborting the signal stops the model. */
+  generatePublish: (id: string, body: GeneratePublishRequest, signal?: AbortSignal) =>
+    request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/generate`, { ...json('POST', body), signal }),
+  applyPublish: (id: string) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/apply`, { method: 'POST' }),
+  uploadThumbnail: (id: string, jpeg: Blob) =>
+    request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/thumbnail`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg }),
+  deleteThumbnail: (id: string) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/thumbnail`, { method: 'DELETE' }),
   health: (fresh = false, signal?: AbortSignal) => request<HealthReport>(`/system/health${fresh ? '?fresh=1' : ''}`, { signal }),
   voices: (engine: string, signal?: AbortSignal) => request<VoicesResponse>(`/system/voices?engine=${encodeURIComponent(engine)}`, { signal }),
   config: (signal?: AbortSignal) => request<SystemConfig>('/system/config', { signal }),
@@ -178,9 +190,11 @@ export const api = {
 /** Absolute URL of an API path, e.g. an OutputFile.url. */
 export const apiUrl = (path: string) => `${API_URL}${path.startsWith('/') ? path : `/${path}`}`;
 
-export const outputUrl = (id: string, name: string, opts: { inline?: boolean; v?: string | number } = {}) => {
+/** `as` downloads the file under another name (e.g. a descriptive name for the YouTube upload). */
+export const outputUrl = (id: string, name: string, opts: { inline?: boolean; v?: string | number; as?: string } = {}) => {
   const q = new URLSearchParams();
   if (opts.inline) q.set('inline', '1');
+  if (opts.as) q.set('as', opts.as);
   if (opts.v !== undefined) q.set('v', String(opts.v));
   const qs = q.toString();
   return `${API_URL}/projects/${encodeURIComponent(id)}/output/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`;

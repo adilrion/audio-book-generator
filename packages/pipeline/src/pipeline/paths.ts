@@ -42,6 +42,13 @@ export class CachePaths {
   work(projectId: string) {
     return path.join(this.cfg.storage.output, projectId, '.work');
   }
+  /** Publishing metadata draft (YouTube / social / file tags) and when it was applied. */
+  publish(projectId: string) {
+    return path.join(this.cfg.storage.output, projectId, 'publish.json');
+  }
+  thumbnail(projectId: string) {
+    return path.join(this.cfg.storage.output, projectId, 'thumbnail.jpg');
+  }
 }
 
 export interface ProjectManifest {

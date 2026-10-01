@@ -174,6 +174,7 @@ async function cmdCreate(args: string[]) {
     if (value !== undefined && !allowed.includes(value)) throw new Error(`--${flag} must be one of: ${allowed.join(', ')}`);
   };
   oneOf('language', values.language, ['en', 'bn']);
+  oneOf('engine', values.engine, ['kokoro', 'piper', 'say']);
   oneOf('highlight', values.highlight, ['sentence', 'paragraph', 'word', 'cursor']);
   oneOf('highlight-style', values['highlight-style'], ['marker', 'underline', 'box']);
   oneOf('page-fit', values['page-fit'], ['auto', 'width', 'text']);
@@ -194,9 +195,11 @@ async function cmdCreate(args: string[]) {
   const language = (values.language ?? 'en') as ProjectSettings['language'];
   // A Bangla book needs a Bangla voice: the .env default engine/voice are for English.
   const engine = (values.engine ?? (language === 'en' ? cfg.TTS_ENGINE : LANGUAGE_DEFAULTS[language].engine)) as ProjectSettings['tts']['engine'];
-  if (!LANGUAGE_DEFAULTS[language].engines.includes(engine)) throw new Error(`--engine ${engine} cannot narrate Bangla. Use --engine piper (bash scripts/download-models.sh bangla).`);
+  const languageName = language === 'bn' ? 'Bangla' : 'English';
+  if (!LANGUAGE_DEFAULTS[language].engines.includes(engine))
+    throw new Error(`--engine ${engine} cannot narrate ${languageName}. Use --engine ${LANGUAGE_DEFAULTS[language].engine}${language === 'bn' ? ' (bash scripts/download-models.sh bangla)' : ''}.`);
   const voice = values.voice ?? (language === 'en' && engine === cfg.TTS_ENGINE ? cfg.TTS_DEFAULT_VOICE : (defaultVoice(engine, language) ?? (language === 'en' ? DEFAULT_VOICES[engine] : undefined)));
-  if (!voice) throw new Error(`Choose a Bangla voice with --voice (list them: audiobook voices --engine ${engine}).`);
+  if (!voice) throw new Error(`Choose a ${languageName} voice with --voice (list them: audiobook voices --engine ${engine}).`);
   const partial: DeepPartial<ProjectSettings> = {
     outputMode: values.mode === 'audio' ? 'audiobook_only' : 'audiobook_video',
     language,

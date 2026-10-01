@@ -100,11 +100,25 @@ export interface PublishAiOptions {
   keywords: string;
 }
 
+export type ThumbnailLayout = 'cover' | 'bold' | 'minimal' | 'photo';
+
+/** How the thumbnail is drawn (it is rendered in the browser and saved as thumbnail.jpg). */
+export interface ThumbnailDesign {
+  layout: ThumbnailLayout;
+  /** Small line above the title, e.g. "Full audiobook". */
+  kicker: string;
+  accent: string;
+  showAuthor: boolean;
+  /** Runtime / read-along badge. */
+  showBadge: boolean;
+}
+
 export interface PublishDraft {
   version: 1;
   youtube: YouTubeDraft;
   social: Record<SocialPlatform, SocialDraft>;
   file: FileTagsDraft;
+  thumbnail?: ThumbnailDesign;
   /** The video's public link, once uploaded — added to social posts. */
   videoUrl: string;
   ai: PublishAiOptions;
@@ -334,7 +348,23 @@ export interface SeoReport {
 }
 
 const norm = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, ' ').trim();
-const words = (s: string) => s.match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu)?.length ?? 0;
+const tokens = (s: string) => s.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}'’]*/gu) ?? [];
+const words = (s: string) => tokens(s).length;
+
+/**
+ * Where a search phrase appears in `text` (character index of its first word), or -1. Search matches
+ * words, not exact strings: "The Metamorphosis by Franz Kafka – Full Audiobook" contains
+ * "the metamorphosis audiobook".
+ */
+export function phraseIndex(text: string, phrase: string): number {
+  const want = tokens(phrase);
+  if (!want.length) return -1;
+  const have = new Set(tokens(text));
+  if (!want.every((w) => have.has(w))) return -1;
+  // Measured at the phrase's most distinctive (longest) word: "the" can match anywhere.
+  const key = want.reduce((a, b) => (b.length > a.length ? b : a));
+  return text.toLocaleLowerCase().indexOf(key);
+}
 
 /** How well the draft follows YouTube's rules and common SEO practice. */
 export function seoReport(draft: PublishDraft, ctx: PublishContext, extra: { thumbnail: boolean; applied: 'current' | 'stale' | 'none' }): SeoReport {
@@ -358,7 +388,7 @@ export function seoReport(draft: PublishDraft, ctx: PublishContext, extra: { thu
 
   if (!kw) add({ id: 'keyword', area: 'title', status: 'warn', label: 'Set a main search phrase', detail: 'The phrase people would type to find this book, e.g. “<title> audiobook”.', weight: 2 });
   else {
-    const at = norm(title).indexOf(kw);
+    const at = phraseIndex(title, kw);
     if (at < 0) add({ id: 'title-keyword', area: 'title', status: 'warn', label: 'Main phrase is not in the title', detail: `Work “${yt.primaryKeyword.trim()}” into the title.`, weight: 3 });
     else if (at > 40) add({ id: 'title-keyword', area: 'title', status: 'warn', label: 'Main phrase is late in the title', detail: 'Put it near the start — the end may be cut off.', weight: 3 });
     else add({ id: 'title-keyword', area: 'title', status: 'pass', label: 'Main phrase leads the title', detail: `“${yt.primaryKeyword.trim()}” is near the start.`, weight: 3 });
@@ -376,8 +406,8 @@ export function seoReport(draft: PublishDraft, ctx: PublishContext, extra: { thu
   else add({ id: 'desc-length', area: 'description', status: 'pass', label: 'Description length', detail: `${bodyWords} words, ${dlen} characters in total.`, weight: 2 });
 
   if (kw) {
-    const snippet = norm([...yt.description.trim()].slice(0, YOUTUBE_LIMITS.descriptionSnippet).join(''));
-    if (snippet.includes(kw)) add({ id: 'desc-hook', area: 'description', status: 'pass', label: 'Strong opening line', detail: 'The main phrase appears in the part shown in search results.', weight: 2 });
+    const snippet = [...yt.description.trim()].slice(0, YOUTUBE_LIMITS.descriptionSnippet).join('');
+    if (phraseIndex(snippet, kw) >= 0) add({ id: 'desc-hook', area: 'description', status: 'pass', label: 'Strong opening line', detail: 'The main phrase appears in the part shown in search results.', weight: 2 });
     else add({ id: 'desc-hook', area: 'description', status: 'warn', label: 'Opening line misses the main phrase', detail: `Only the first ~${YOUTUBE_LIMITS.descriptionSnippet} characters show in search — mention “${yt.primaryKeyword.trim()}” there.`, weight: 2 });
   }
 

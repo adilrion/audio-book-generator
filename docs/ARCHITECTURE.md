@@ -21,6 +21,7 @@ File references are given so you can check each claim.
 - [Timeline math](#timeline-math)
 - [Compositor and camera](#compositor-and-camera)
 - [Encoding, mastering and muxing](#encoding-mastering-and-muxing)
+- [Publishing metadata](#publishing-metadata)
 - [Cache keys](#cache-keys)
 - [Resumability](#resumability)
 - [Database schema](#database-schema)
@@ -510,6 +511,31 @@ zoom changes scale every frame and composites each one.
 - **Re-mux without re-render**: when only audio, subtitle or metadata inputs changed and the
   segments were already cleaned up, the picture is stream-copied from the existing
   `audiobook.mp4` (the manifest records which segment keys it was built from).
+
+## Publishing metadata
+
+`apps/api/src/publish/`, `packages/pipeline/src/publish/`, pure helpers in `packages/types/src/publish.ts`
+(shared by the API and the web editor, so the live SEO checks and the applied tags are computed the same way).
+
+- **Draft on disk, not in the database.** `storage/output/<id>/publish.json` holds the draft and when
+  it was applied; `thumbnail.jpg` sits next to the outputs. Both survive "Clean project cache" and go
+  with the outputs on delete. No migration was needed.
+- **Rules first, AI second.** `templateDraft()` builds a complete draft from the book's facts. The AI
+  (`generatePublishDraft()`) is creative writing, so unlike the book tasks it samples
+  (`temperature` 0.7–0.8, a random `seed` per run) — but it still answers structured JSON, every
+  field is cleaned and clipped, and the template fills whatever is missing. It is not cached: a
+  regeneration should give new wording. Timestamps, links and chapter lists never come from the model.
+- **Applying is a stream copy.** `writeMediaTags()` runs FFmpeg with `-c copy`, maps `0:V` (video
+  that is not cover art, so an old cover is replaced), audio and subtitles, keeps chapters with
+  `-map_chapters 0` (FFmpeg rebuilds the QuickTime chapter track), sets the tags with `-metadata`
+  (empty values clear a tag) and the cover as `attached_pic`. The result is probed (same duration,
+  audio and video present) before it replaces the original; a ~1 GB MP4 takes seconds.
+- **Staleness.** After applying, the size and mtime of each file and a hash of everything that was
+  written are recorded. A later pipeline run that re-muxes the file, or an edit to the draft or
+  thumbnail, shows up as `stale: ["files"]` / `["draft"]`. The pipeline does not re-apply on its own.
+- **Thumbnail in the browser.** The canvas renderer (`apps/web/lib/thumbnail.ts`) uses the app's
+  fonts; the saved JPEG is exactly the preview. The cover page is loaded with CORS (`?cors=1` keeps it
+  apart from the cached non-CORS `<img>`), so the canvas can be exported.
 
 ## Cache keys
 

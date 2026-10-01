@@ -20,13 +20,16 @@ function setup(available = true) {
   const calls: { voice: string; text: string; speed: number; language: string }[] = [];
   const pool = {
     call: async (method: string, params: Record<string, unknown>) => {
-      if (method === 'tts.engines') return { kokoro: { available, message: available ? 'ready' : 'Kokoro model files are missing. Run: pnpm setup:models' } };
+      if (method === 'tts.engines')
+        return { kokoro: { available, message: available ? 'ready' : 'Kokoro model files are missing. Run: pnpm setup:models' }, piper: { available: true, message: 'ready' } };
       if (method === 'tts.voices')
         return {
           available: true,
           voices: [
             { id: 'af_heart', name: 'Heart', language: 'en', gender: 'female' },
             { id: 'jf_alpha', name: 'Alpha', language: 'ja', gender: 'female' },
+            { id: 'bn_BD-google-medium:4811', name: '4811', language: 'bn' },
+            { id: 'bn_BD-google-medium:5233', name: '5233', language: 'bn' },
           ],
         };
       if (method === 'tts.synthesize') {
@@ -60,6 +63,12 @@ describe('voice preview', () => {
     const { controller, calls } = setup();
     await controller.sample('kokoro', 'jf_alpha', 1, 'en');
     expect(calls[0]).toMatchObject({ text: PREVIEW_TEXT.ja, language: 'en' }); // Kokoro picks its phonemizer from the voice id
+  });
+
+  it('takes a multi-speaker model’s plain id for its first speaker, in the model’s language', async () => {
+    const { controller, calls } = setup();
+    await controller.sample('piper', 'bn_BD-google-medium', 1, 'en');
+    expect(calls).toEqual([{ voice: 'bn_BD-google-medium:4811', text: PREVIEW_TEXT.bn, speed: 1, language: 'bn' }]);
   });
 
   it('refuses unknown engines and voices that are not installed', async () => {
