@@ -12,6 +12,7 @@ import {
   type YouTubeDraft,
   SOCIAL_PLATFORMS,
   SOCIAL_RULES,
+  WHOLE_BOOK_CLAIM,
   YOUTUBE_CATEGORIES,
   YOUTUBE_LIMITS,
   chapterLines,
@@ -19,6 +20,7 @@ import {
   composeDescription,
   composeSocial,
   fileTagsFor,
+  isPartial,
   sanitizeHashtag,
   sanitizeTag,
   seoReport,
@@ -34,6 +36,8 @@ import {
   FileJson,
   FileText,
   Film,
+  GitCompareArrows,
+  History,
   ImageIcon,
   Info,
   LoaderCircle,
@@ -50,6 +54,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
 import { CopyButton } from '@/components/copy-button';
+import { type CompareSide, PublishCompare } from '@/components/publish-compare';
 import { CharCount, Meter, PubField, TagInput } from '@/components/publish-fields';
 import { SearchPreview, SocialPreview, WatchPreview } from '@/components/publish-preview';
 import { SeoChecklist } from '@/components/seo-checklist';
@@ -58,7 +63,6 @@ import { ThumbnailDesigner } from '@/components/thumbnail-designer';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -117,6 +121,20 @@ const SHOWN_TAGS: [key: string, label: string][] = [
 ];
 
 type Busy = { kind: 'save' | 'apply' } | { kind: 'generate'; sections: ('youtube' | 'social')[]; started: number };
+
+/** An AI suggestion that has not been accepted or discarded yet. */
+interface Proposal {
+  draft: PublishDraft;
+  model: string;
+  sections: ('youtube' | 'social')[];
+}
+
+interface CompareState {
+  mode: 'ai' | 'version';
+  right: CompareSide;
+  title: string;
+  description: string;
+}
 
 function PublishPlaceholder({ phase }: { phase: Phase }) {
   const working = phase === 'active' || phase === 'queued';
@@ -184,7 +202,17 @@ function KitRow({ icon, label, value, children }: { icon: ReactNode; label: stri
  * tags; live YouTube-style previews and SEO checks; embedding the metadata in the finished files;
  * and an upload kit with everything to paste into YouTube Studio.
  */
-export function PublishPanel({ project, phase, onDirtyChange }: { project: ProjectDetail; phase: Phase; onDirtyChange?: (dirty: boolean) => void }) {
+export function PublishPanel({
+  project,
+  phase,
+  onDirtyChange,
+  onOpenSettings,
+}: {
+  project: ProjectDetail;
+  phase: Phase;
+  onDirtyChange?: (dirty: boolean) => void;
+  onOpenSettings?: () => void;
+}) {
   const id = project.id;
   const ready = project.outputs.some((o) => o.name === 'audiobook.mp4' || o.name === 'audiobook.m4a');
   const outputsSig = project.outputs.map((o) => `${o.name}:${o.size}`).join('|');
@@ -198,7 +226,8 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
   const [livePreview, setLivePreview] = useState<string>();
   const [busy, setBusy] = useState<Busy | null>(null);
   const [error, setError] = useState<ApiError>();
-  const [confirm, setConfirm] = useState<('youtube' | 'social')[] | null>(null);
+  const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [compare, setCompare] = useState<CompareState | null>(null);
   const [notice, setNotice] = useState<string>();
   const abort = useRef<AbortController | null>(null);
   const ids = { title: 'pub-title', desc: 'pub-description', keyword: useId(), pinned: 'pub-pinned', tags: 'pub-tags', hashtags: 'pub-hashtags', url: useId(), keywords: useId() };
@@ -238,6 +267,10 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
 
   const yt = draft.youtube;
   const design = draft.thumbnail ?? DEFAULT_DESIGN;
+  const partial = isPartial(ctx);
+  const cov = ctx.coverage;
+  const claim = WHOLE_BOOK_CLAIM[yt.language] ?? WHOLE_BOOK_CLAIM.en;
+  const claimsWhole = partial && [yt.title, yt.description, yt.thumbnailText, design.kicker].some((t) => claim.test(t));
   const setYt = (patch: Partial<YouTubeDraft>) => setDraft((d) => d && { ...d, youtube: { ...d.youtube, ...patch } });
   const setFile = (patch: Partial<FileTagsDraft>) => setDraft((d) => d && { ...d, file: { ...d.file, ...patch } });
   const setAi = (patch: Partial<PublishAiOptions>) => setDraft((d) => d && { ...d, ai: { ...d.ai, ...patch } });
@@ -265,18 +298,25 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
     }
   };
 
+  const reviewProposal = (p: Proposal) =>
+    setCompare({
+      mode: 'ai',
+      right: { label: 'AI suggestion', draft: p.draft },
+      title: 'Compare with the AI suggestion',
+      description: `Written by ${p.model}. Nothing has changed yet — pick the version you want for each field, then apply. Your current draft is kept in Versions.`,
+    });
+
   const generate = async (sections: ('youtube' | 'social')[]) => {
-    setConfirm(null);
     const ctrl = new AbortController();
     abort.current = ctrl;
     setBusy({ kind: 'generate', sections, started: Date.now() });
     setError(undefined);
     setNotice(undefined);
     try {
-      const fresh = await api.generatePublish(id, { sections, draft, options: draft.ai }, ctrl.signal);
-      adopt(fresh);
-      setLivePreview(undefined);
-      setNotice(sections.length === 2 ? 'New YouTube metadata and social posts are ready — review them before you upload.' : sections[0] === 'youtube' ? 'New YouTube metadata is ready — review it before you upload.' : 'New social posts are ready.');
+      const res = await api.generatePublish(id, { sections, draft, options: draft.ai }, ctrl.signal);
+      const p = { draft: res.proposal, model: res.model, sections };
+      setProposal(p);
+      reviewProposal(p);
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') setError(toApiError(e));
     } finally {
@@ -285,7 +325,36 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
     }
   };
 
-  const askGenerate = (sections: ('youtube' | 'social')[]) => (s.saved ? setConfirm(sections) : void generate(sections));
+  const askGenerate = (sections: ('youtube' | 'social')[]) => void generate(sections);
+
+  const applyCompare = async (merged: PublishDraft, picked: { right: number; total: number }) => {
+    if (!compare) return;
+    setBusy({ kind: 'save' });
+    setError(undefined);
+    try {
+      const label =
+        compare.mode === 'ai'
+          ? `${picked.right === picked.total ? 'AI' : 'AI + yours'} · ${proposal?.model ?? 'local model'}`
+          : `Restored from ${compare.right.label}`;
+      adopt(await api.savePublish(id, merged, label));
+      if (compare.mode === 'ai') setProposal(null);
+      setCompare(null);
+      setLivePreview(undefined);
+      setNotice(compare.mode === 'ai' ? `Applied ${picked.right} of ${picked.total} AI changes. The previous draft is kept in Versions.` : `Restored ${picked.right} field${picked.right === 1 ? '' : 's'} from “${compare.right.label}”.`);
+    } catch (e) {
+      setError(toApiError(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openVersion = (v: CompareSide, when?: string) =>
+    setCompare({
+      mode: 'version',
+      right: v,
+      title: `Compare with “${v.label}”`,
+      description: `${when ? `Saved ${formatRelative(when)}. ` : ''}Pick the fields to bring back; everything else stays as it is now.`,
+    });
 
   const apply = async () => {
     setBusy({ kind: 'apply' });
@@ -383,6 +452,37 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" disabled={working} title="Compare with or restore an earlier version">
+                  <History aria-hidden /> Versions{s.history.length ? ` (${s.history.length})` : ''}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel className="font-normal text-muted-foreground">
+                  Now: {s.label}
+                  {dirty ? ' + unsaved edits' : ''}
+                </DropdownMenuLabel>
+                {proposal && (
+                  <DropdownMenuItem onSelect={() => reviewProposal(proposal)}>
+                    <Sparkles aria-hidden /> AI suggestion (not applied)
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => openVersion({ label: 'Rule-based draft', draft: s.template })}>
+                  <GitCompareArrows aria-hidden /> Rule-based draft
+                </DropdownMenuItem>
+                {s.history.length > 0 && <DropdownMenuSeparator />}
+                {s.history.map((v, i) => (
+                  <DropdownMenuItem key={`${v.at}-${i}`} onSelect={() => openVersion({ label: v.label, draft: v.draft }, v.at)}>
+                    <History aria-hidden />
+                    <span className="flex min-w-0 flex-1 justify-between gap-2">
+                      <span className="truncate">{v.label}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">{formatRelative(v.at)}</span>
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button variant="outline" onClick={() => void save()} disabled={!dirty || working}>
               {busy?.kind === 'save' ? <LoaderCircle className="animate-spin" aria-hidden /> : <Save aria-hidden />} Save
             </Button>
@@ -429,8 +529,49 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
         </div>
       </div>
 
-      {(error || notice || appliedNote) && (
+      {(error || notice || appliedNote || partial || (proposal && !compare)) && (
         <div className="grid gap-3">
+          {partial && cov && (
+            <Alert variant="warning">
+              <TriangleAlert aria-hidden />
+              <AlertDescription className="grid gap-2 text-foreground">
+                <span>
+                  <b className="font-medium">This video narrates {cov.label} only</b> — {cov.narratedChapters} of {cov.totalChapters} chapters
+                  {cov.pages ? `, pages ${cov.pages[0]}–${cov.pages[1]}` : ''}, about {cov.narratedWords.toLocaleString()} of {cov.totalWords.toLocaleString()} words. The
+                  metadata says which part it is instead of “full audiobook”, so viewers know what they get.
+                  {claimsWhole ? ' Your saved draft still says “full” — compare it with the rule-based draft or generate again.' : ''}
+                </span>
+                <span className="flex flex-wrap gap-2">
+                  {claimsWhole && (
+                    <Button size="xs" variant="outline" onClick={() => openVersion({ label: 'Rule-based draft', draft: s.template })}>
+                      <GitCompareArrows aria-hidden /> Compare with the rule-based draft
+                    </Button>
+                  )}
+                  {onOpenSettings && (
+                    <Button size="xs" variant="ghost" onClick={onOpenSettings}>
+                      Narrate the whole book (Settings → chapter range)
+                    </Button>
+                  )}
+                </span>
+              </AlertDescription>
+            </Alert>
+          )}
+          {proposal && !compare && (
+            <Alert variant="info">
+              <Sparkles aria-hidden />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2 text-foreground">
+                <span>The AI suggestion is ready but not applied.</span>
+                <span className="flex gap-2">
+                  <Button size="xs" variant="outline" onClick={() => reviewProposal(proposal)}>
+                    <GitCompareArrows aria-hidden /> Compare
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setProposal(null)}>
+                    Discard
+                  </Button>
+                </span>
+              </AlertDescription>
+            </Alert>
+          )}
           {error && <ApiErrorAlert error={error} />}
           {notice && !error && (
             <Alert variant="success">
@@ -514,7 +655,7 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
                 </ToggleRow>
                 <ToggleRow
                   label="Say the narration is a synthetic voice"
-                  description="Adds one line to the description. Honest with listeners, and it explains the read-along format."
+                  description="Adds one line to the description. Honest with listeners, and it explains how the video works."
                   checked={yt.aiNarrationNote}
                   onCheckedChange={(v) => setYt({ aiNarrationNote: v })}
                 />
@@ -872,26 +1013,22 @@ export function PublishPanel({ project, phase, onDirtyChange }: { project: Proje
         </aside>
       </div>
 
-      <Dialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Replace with new AI-written text?</DialogTitle>
-            <DialogDescription>
-              {confirm?.includes('youtube') ? 'The title, description, tags, hashtags and pinned comment' : 'The social posts'}
-              {confirm?.length === 2 ? ' and the social posts' : ''} are rewritten. Upload settings, file metadata and the thumbnail stay as they are
-              {dirty ? '; your other unsaved edits are saved' : ''}.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirm(null)}>
-              Cancel
-            </Button>
-            <Button variant="brand" onClick={() => confirm && void generate(confirm)}>
-              <Sparkles aria-hidden /> Generate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {compare && (
+        <PublishCompare
+          open
+          onOpenChange={(o) => !o && setCompare(null)}
+          title={compare.title}
+          description={compare.description}
+          left={{ label: dirty ? 'Current (unsaved)' : 'Current', draft }}
+          right={compare.right}
+          ctx={ctx}
+          seo={{ thumbnail: !!s.thumbnail, applied: appliedState }}
+          defaultSide={compare.mode === 'ai' ? 'right' : 'left'}
+          applyLabel={compare.mode === 'ai' ? 'Apply selected' : 'Restore selected'}
+          busy={busy?.kind === 'save'}
+          onApply={(m, p) => void applyCompare(m, p)}
+        />
+      )}
     </div>
   );
 }

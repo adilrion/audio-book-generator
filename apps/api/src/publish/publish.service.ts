@@ -8,6 +8,9 @@ import {
   type DeepPartial,
   type EmbeddedTags,
   type GeneratePublishRequest,
+  type GeneratePublishResult,
+  type PublishCoverage,
+  type PublishVersion,
   type ProjectSettings,
   type PublishContext,
   type PublishDraft,
@@ -15,6 +18,7 @@ import {
   type Timeline,
   YOUTUBE_LIMITS,
   fileTagsFor,
+  partLabel,
   resolveSettings,
 } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
@@ -26,8 +30,18 @@ import { generateSchema, issues, saveSchema } from './publish.schema';
 /** storage/output/<id>/publish.json */
 interface PublishFile {
   draft: PublishDraft;
+  /** How the current draft was made. */
+  label?: string;
+  /** Earlier saved versions, newest first. */
+  history?: PublishVersion[];
   applied?: { at: string; draftHash: string; cover: boolean; files: AppliedFile[] };
 }
+
+const MAX_VERSIONS = 20;
+/** Drafts compared without their save time. */
+const sameDraft = (a: PublishDraft, b: PublishDraft) => JSON.stringify({ ...a, updatedAt: undefined }) === JSON.stringify({ ...b, updatedAt: undefined });
+/** Narrated words below this share of the book's body text = only part of the book. */
+const COMPLETE_SHARE = 0.85;
 
 const MEDIA: [name: string, kind: 'video' | 'audio'][] = [
   ['audiobook.mp4', 'video'],
@@ -63,6 +77,15 @@ export class PublishService {
     await atomicWriteJson(this.paths.publish(id), file, true);
   }
 
+  /** Save a new current draft; the one it replaces goes to the version history. */
+  private async commit(id: string, file: PublishFile | undefined, draft: PublishDraft, label: string): Promise<void> {
+    const history = [...(file?.history ?? [])];
+    const changed = !file?.draft || !sameDraft(file.draft, draft);
+    if (file?.draft && changed)
+      history.unshift({ at: file.draft.updatedAt ?? file.draft.generatedAt ?? new Date().toISOString(), label: file.label ?? defaultLabel(file.draft), draft: file.draft });
+    await this.store(id, { ...file, draft: { ...draft, updatedAt: new Date().toISOString() }, label: changed ? label : (file?.label ?? label), history: history.slice(0, MAX_VERSIONS) });
+  }
+
   private async timeline(id: string): Promise<Timeline | undefined> {
     return readJsonIfExists<Timeline>(path.join(this.paths.output(id), 'timeline.json')).catch(() => undefined);
   }
@@ -72,6 +95,7 @@ export class PublishService {
     const settings = resolveSettings(p.settings as DeepPartial<ProjectSettings>);
     const tl = timeline ?? (await this.timeline(id));
     const outputs = await this.projects.outputs(id);
+    const coverage = tl ? await this.coverage(id, tl, settings) : undefined;
     return {
       title: p.name,
       author: p.document.author?.trim() || undefined,
@@ -83,6 +107,32 @@ export class PublishService {
       aspectRatio: settings.video.aspectRatio,
       hasVideo: outputs.some((o) => o.name === 'audiobook.mp4'),
       hasAudio: outputs.some((o) => o.name === 'audiobook.m4a'),
+      coverage,
+      openingLine: openingLineOf(tl),
+    };
+  }
+
+  /**
+   * Is the video the whole book? Narrated words are compared with the words of the book's body
+   * chapters (front and back matter do not count), so a chapter range, excluded chapters or an
+   * unfinished run all show up — merged chapters do not.
+   */
+  private async coverage(id: string, tl: Timeline, settings: ProjectSettings): Promise<PublishCoverage> {
+    const chapters = await this.projects.chapters(id).catch(() => []);
+    const body = chapters.filter((c) => !c.matter);
+    const totalWords = body.reduce((n, c) => n + (c.wordCount ?? 0), 0);
+    const narratedWords = tl.segments.reduce((n, seg) => n + (seg.text.match(/\S+/g)?.length ?? 0), 0);
+    const pages = tl.segments.map((seg) => seg.page);
+    const range = settings.text.chapterRange;
+    const complete = totalWords > 0 ? narratedWords >= totalWords * COMPLETE_SHARE : !range;
+    return {
+      complete,
+      label: complete ? undefined : partLabel(tl.chapters.map((c) => c.title), settings.language),
+      narratedChapters: tl.chapters.length,
+      totalChapters: body.length,
+      pages: pages.length ? [Math.min(...pages), Math.max(...pages)] : undefined,
+      narratedWords,
+      totalWords,
     };
   }
 
@@ -136,6 +186,9 @@ export class PublishService {
     }
     return {
       draft,
+      label: file?.label ?? defaultLabel(draft),
+      history: file?.history ?? [],
+      template: templateDraft(ctx),
       saved: !!file,
       context: ctx,
       thumbnail: thumb ? { url: `/projects/${id}/output/thumbnail.jpg`, size: thumb.size, updatedAt: thumb.mtime.toISOString() } : undefined,
@@ -151,12 +204,15 @@ export class PublishService {
     const parsed = saveSchema.safeParse(body);
     if (!parsed.success) throw badRequest(`Invalid publishing metadata: ${issues(parsed.error)}`);
     const file = await this.load(id);
-    await this.store(id, { ...file, draft: { ...(parsed.data.draft as PublishDraft), updatedAt: new Date().toISOString() } });
+    await this.commit(id, file, parsed.data.draft as PublishDraft, parsed.data.label?.trim() || 'Edited');
     return this.state(id);
   }
 
-  /** Write YouTube and/or social metadata with the local AI, merged into the editor's draft. */
-  async generate(id: string, body: unknown, signal?: AbortSignal): Promise<PublishState> {
+  /**
+   * Write YouTube and/or social metadata with the local AI, merged into the editor's draft. Nothing
+   * is saved: the editor shows the proposal next to the current draft and saves what is accepted.
+   */
+  async generate(id: string, body: unknown, signal?: AbortSignal): Promise<GeneratePublishResult> {
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) throw badRequest(`Invalid request: ${issues(parsed.error)}`);
     const req = parsed.data as GeneratePublishRequest;
@@ -172,9 +228,8 @@ export class PublishService {
       const file = await this.load(id);
       const draft = req.draft ?? file?.draft ?? templateDraft(ctx);
       const opts = { ...draft.ai, ...req.options };
-      const next = await generatePublishDraft(provider, { ctx, excerpt: excerptOf(tl, ctx.language) }, draft, req.sections, opts, signal);
-      await this.store(id, { ...file, draft: { ...next, updatedAt: new Date().toISOString() } });
-      return this.state(id);
+      const proposal = await generatePublishDraft(provider, { ctx, excerpt: excerptOf(tl, ctx.language) }, draft, req.sections, opts, signal);
+      return { proposal, model: provider.model };
     });
   }
 
@@ -209,7 +264,7 @@ export class PublishService {
         done.push({ name, size: st.size, mtimeMs: st.mtimeMs });
       }
       if (!done.length) throw conflict('There are no finished files to write the metadata into yet.');
-      await this.store(id, { draft, applied: { at: new Date().toISOString(), draftHash: await this.applyHash(id, draft, ctx), cover: draft.file.embedCover, files: done } });
+      await this.store(id, { ...file, draft, applied: { at: new Date().toISOString(), draftHash: await this.applyHash(id, draft, ctx), cover: draft.file.embedCover, files: done } });
       return this.state(id);
     });
   }
@@ -240,6 +295,17 @@ export class PublishService {
       this.busy.delete(id);
     }
   }
+}
+
+const defaultLabel = (d: PublishDraft) => (d.origin.youtube === 'ai' || d.origin.social === 'ai' ? `AI · ${d.model?.replace(/^ollama:/, '') ?? 'local model'}` : 'Rules');
+
+/** The first sentence that reads like prose (skips chapter titles and short headings), clipped to ~160 characters. */
+export function openingLineOf(tl: Timeline | undefined): string | undefined {
+  const s = tl?.segments.find((seg) => seg.text.trim().length >= 40 && /\s\S+\s/.test(seg.text))?.text.replace(/\s+/g, ' ').trim();
+  if (!s) return undefined;
+  if (s.length <= 160) return s;
+  const cut = s.slice(0, 159);
+  return `${cut.slice(0, cut.lastIndexOf(' ') > 100 ? cut.lastIndexOf(' ') : 159).replace(/[,;:]$/, '')}…`;
 }
 
 /** The book's opening as narrated (front matter the run skipped is not in the timeline). */

@@ -47,7 +47,7 @@ export const publishDraftSchema = z.object({
   }),
   thumbnail: z
     .object({
-      layout: z.enum(['cover', 'bold', 'minimal', 'photo']),
+      layout: z.enum(['cover', 'bold', 'minimal', 'photo', 'quote', 'player', 'split', 'cinematic', 'ribbon']),
       kicker: text(80),
       accent: z.string().regex(/^#[0-9a-f]{6}$/i),
       showAuthor: z.boolean(),
@@ -68,7 +68,7 @@ export const generateSchema = z.object({
   options: aiOptions.partial().optional(),
 });
 
-export const saveSchema = z.object({ draft: publishDraftSchema });
+export const saveSchema = z.object({ draft: publishDraftSchema, label: z.string().max(80).optional() });
 
 export function issues(e: z.ZodError): string {
   return e.issues

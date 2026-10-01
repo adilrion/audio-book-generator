@@ -2,7 +2,7 @@
 
 import type { PublishContext, PublishState, ThumbnailDesign } from '@app/types';
 import { Download, ImageUp, LoaderCircle, Save, Trash2 } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
 import { CharCount, PubField } from '@/components/publish-fields';
 import { Button } from '@/components/ui/button';
@@ -12,13 +12,58 @@ import { Segmented, SegmentedItem } from '@/components/ui/segmented';
 import { Switch } from '@/components/ui/switch';
 import { ApiError, api, apiUrl, pageImageUrl, toApiError } from '@/lib/api';
 import { formatBytes, formatRelative } from '@/lib/format';
-import { THUMB_ACCENTS, THUMB_H, THUMB_LAYOUTS, THUMB_W, canvasToJpeg, drawThumbnail, loadFonts, loadImage, pageFonts } from '@/lib/thumbnail';
+import { THUMB_ACCENTS, THUMB_H, THUMB_LAYOUTS, THUMB_W, type ThumbContent, canvasToJpeg, drawThumbnail, loadFonts, loadImage, pageFonts } from '@/lib/thumbnail';
 import { cn } from '@/lib/utils';
 
 function runtime(sec: number, lang: 'en' | 'bn') {
   const m = Math.max(1, Math.round(sec / 60));
   const t = m >= 60 ? `${Math.floor(m / 60)} h ${m % 60 ? `${m % 60} min` : ''}`.trim() : `${m} min`;
-  return lang === 'bn' ? `${t} · পাঠসহ` : `${t} · Read-along`;
+  return lang === 'bn' ? `${t} · পাঠসহ` : `${t} · With text`;
+}
+
+/** Small live previews of every layout with the current text and image; click one to use it. */
+function LayoutGallery({ design, content, onPick, disabled }: { design: ThumbnailDesign; content: ThumbContent | null; onPick: (l: ThumbnailDesign['layout']) => void; disabled?: boolean }) {
+  const refs = useRef<Record<string, HTMLCanvasElement | null>>({});
+  useEffect(() => {
+    if (!content) return;
+    const t = window.setTimeout(() => {
+      for (const l of THUMB_LAYOUTS) {
+        const ctx = refs.current[l.value]?.getContext('2d');
+        if (!ctx) continue;
+        ctx.setTransform(0.25, 0, 0, 0.25, 0, 0);
+        drawThumbnail(ctx, { ...design, layout: l.value }, content);
+      }
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [design, content]);
+  return (
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3" role="radiogroup" aria-label="Thumbnail layout">
+      {THUMB_LAYOUTS.map((l) => {
+        const on = design.layout === l.value;
+        return (
+          <button
+            key={l.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            disabled={disabled}
+            onClick={() => onPick(l.value)}
+            title={l.hint}
+            className={cn(
+              'group grid gap-1.5 rounded-xl border p-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+              on && 'border-foreground/50 bg-accent/50 ring-1 ring-foreground/25',
+            )}
+          >
+            <canvas ref={(el) => void (refs.current[l.value] = el)} width={THUMB_W / 4} height={THUMB_H / 4} className="aspect-video w-full rounded-lg bg-muted" aria-hidden />
+            <span className="grid gap-0.5 px-1 pb-0.5">
+              <span className="text-[13px] font-medium">{l.label}</span>
+              <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">{l.hint}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 /**
@@ -71,16 +116,20 @@ export function ThumbnailDesigner({
 
   const image = source === 'custom' && customImg ? customImg : coverImg;
   const sig = JSON.stringify([design, text, source, customImg?.src.slice(-32), !!coverImg]);
+  const content = useMemo<ThumbContent | null>(
+    () => (fonts ? { title: text, author: ctx.author, badge: runtime(ctx.durationSec, ctx.language), image, fonts, quote: ctx.openingLine } : null),
+    [fonts, text, ctx.author, ctx.durationSec, ctx.language, ctx.openingLine, image],
+  );
 
   useEffect(() => {
     const c = canvas.current;
     const ctx2d = c?.getContext('2d');
-    if (!c || !ctx2d || !fonts) return;
-    drawThumbnail(ctx2d, design, { title: text, author: ctx.author, badge: runtime(ctx.durationSec, ctx.language), image, fonts });
+    if (!c || !ctx2d || !content) return;
+    drawThumbnail(ctx2d, design, content);
     const t = window.setTimeout(() => onPreview(c.toDataURL('image/jpeg', 0.82)), 120);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, fonts]);
+  }, [sig, content]);
 
   const set = (patch: Partial<ThumbnailDesign>) => onDesignChange({ ...design, ...patch });
 
@@ -152,13 +201,8 @@ export function ThumbnailDesigner({
 
       <div className="grid gap-2.5">
         <Label className="text-[13px]">Layout</Label>
-        <Segmented value={design.layout} onValueChange={(v) => set({ layout: v as ThumbnailDesign['layout'] })} aria-label="Thumbnail layout" className="flex-wrap sm:w-full" disabled={disabled}>
-          {THUMB_LAYOUTS.map((l) => (
-            <SegmentedItem key={l.value} value={l.value} title={l.hint}>
-              {l.label}
-            </SegmentedItem>
-          ))}
-        </Segmented>
+        <LayoutGallery design={design} content={content} onPick={(layout) => set({ layout })} disabled={disabled} />
+        <p className="text-xs text-muted-foreground">Thumbnails are seen small: keep the title to a few big words, with strong contrast. Try two layouts and keep the one you would click.</p>
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2">

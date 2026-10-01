@@ -12,6 +12,7 @@ import {
   fileTagsFor,
   fitHashtags,
   fitTags,
+  partLabel,
   phraseIndex,
   sanitizeHashtag,
   seoReport,
@@ -20,7 +21,7 @@ import {
   youtubeTagChars,
   ytTimestamp,
 } from '@app/types';
-import { type LLMProvider, type LLMRequest, cleanText, generatePublishDraft, paragraphize, readMediaTags, run, templateDraft, writeMediaTags } from '../src';
+import { type LLMProvider, type LLMRequest, cleanText, generatePublishDraft, paragraphize, rankTitles, readMediaTags, run, scrub, scrubTitle, templateDraft, writeMediaTags } from '../src';
 import { hasFfmpeg } from './runner-fakes';
 
 const ctx: PublishContext = {
@@ -185,11 +186,13 @@ describe('AI metadata', () => {
     const d = await generatePublishDraft(llm, { ctx, excerpt: 'One morning…' }, base, ['youtube', 'social'], base.ai);
     expect(llm.requests[0].prompt).toContain('BOOK TITLE: The Metamorphosis');
     expect(llm.requests[0].temperature).toBeGreaterThan(0);
-    expect(d.youtube.title).toBe('The Metamorphosis Audiobook by Franz Kafka | Read Along');
+    // The search format outranks the model's titles; "read along" is dropped from titles.
+    expect(d.youtube.title).toBe('The Metamorphosis by Franz Kafka | Full Audiobook with Text');
+    expect(d.youtube.titleOptions).toContain('The Metamorphosis Audiobook by Franz Kafka');
     expect(d.youtube.titleOptions).not.toContain('x');
     expect(d.youtube.visibility).toBe('unlisted');
     expect(d.youtube.categoryId).toBe('24');
-    expect(d.youtube.hashtags).toEqual(['Audiobook', 'TheMetamorphosis', 'Kafka', 'twowords']);
+    expect(d.youtube.hashtags).toEqual(['Audiobook', 'TheMetamorphosis', 'FranzKafka', 'Kafka', 'twowords']);
     expect(d.youtube.tags.filter((t) => t.toLowerCase() === 'kafka')).toHaveLength(1);
     expect(d.youtube.description.split('\n\n').length).toBeGreaterThan(1);
     expect(d.origin).toEqual({ youtube: 'ai', social: 'ai' });
@@ -198,7 +201,7 @@ describe('AI metadata', () => {
     expect(d.social.facebook.text).toBe('Watch the classic now!');
     expect(d.social.facebook.hashtags).toEqual(['BookLovers', 'Kafka']);
     expect(d.social.instagram.text).toContain('link in bio');
-    expect(d.social.tiktok.text).toBe('Kafka but make it read-along.');
+    expect(d.social.tiktok.text).toBe('Kafka but make it follow-along.');
     expect(socialLength('x', d.social.x, 'https://youtu.be/xxxxxxxxxxx')).toBeLessThanOrEqual(280);
     expect(d.social.linkedin.text).toBe(base.social.linkedin.text); // empty answer → rule-based post
   });
@@ -263,5 +266,60 @@ describe.skipIf(!hasFfmpeg)('writing tags into media files (ffmpeg)', () => {
     expect(a.hasCover).toBe(true);
     expect(a.chapters).toBe(2);
     expect(fs.readdirSync(tmp).filter((f) => f.includes('.tags.tmp'))).toEqual([]);
+  });
+});
+
+describe('partial narration (only some chapters)', () => {
+  const part: PublishContext = {
+    ...ctx,
+    durationSec: 2317,
+    chapters: [{ title: 'I', start: 0, end: 2317 }],
+    coverage: { complete: false, label: 'Chapter I', narratedChapters: 1, totalChapters: 3, pages: [3, 26], narratedWords: 7355, totalWords: 21975 },
+  };
+
+  it('names the part', () => {
+    expect(partLabel(['I'], 'en')).toBe('Chapter I');
+    expect(partLabel(['Part One'], 'en')).toBe('Part One');
+    expect(partLabel(['1', '2', '3'], 'en')).toBe('Chapters 1–3');
+    expect(partLabel(['I'], 'bn')).toBe('অধ্যায় I');
+  });
+
+  it('never promises the whole book in the rule-based draft', () => {
+    const d = templateDraft(part);
+    expect(d.youtube.title).toBe('The Metamorphosis – Chapter I | Franz Kafka Audiobook with Text');
+    for (const t of [d.youtube.title, d.youtube.description, d.thumbnail!.kicker, d.file.comment, ...Object.values(d.social).map((p) => p.text)]) expect(t).not.toMatch(/\b(full|complete)\b/i);
+    expect(d.youtube.description).toMatch(/1 of 3 chapters/);
+    expect(d.youtube.description).toMatch(/next chapter/);
+    expect(d.youtube.tags).not.toContain('full audiobook');
+    expect(d.file.title).toBe('The Metamorphosis – Chapter I');
+    const r = seoReport(d, part, { thumbnail: true, applied: 'current' });
+    expect(r.checks.find((c) => c.id === 'scope')?.status).toBe('pass');
+    expect(r.blocking).toBe(0);
+  });
+
+  it('fails a draft that says “full audiobook”', () => {
+    const d = templateDraft(ctx); // written as if it were the whole book
+    const scope = seoReport(d, part, { thumbnail: true, applied: 'current' }).checks.find((c) => c.id === 'scope');
+    expect(scope?.status).toBe('fail');
+    expect(scope?.detail).toMatch(/title, description, thumbnail/);
+  });
+
+  it('ranks and scrubs AI wording', () => {
+    expect(scrubTitle('The Metamorphosis Audiobook: Franz Kafka Read-Along')).toBe('The Metamorphosis Audiobook: Franz Kafka');
+    expect(scrubTitle('The Metamorphosis – Full Audiobook with Read-Along Text')).toBe('The Metamorphosis – Full Audiobook with Text');
+    expect(scrub('A read-along experience. Read along now!', ctx, 'en')).toBe('A follow-along experience. Follow along now!');
+    expect(scrub('Enjoy the full audiobook and the complete book.', part, 'en')).toBe('Enjoy the audiobook and the book.');
+    const ranked = rankTitles(['The Metamorphosis | Full Audiobook', 'The Metamorphosis – Chapter I | Franz Kafka Audiobook', 'Kafka Read Along'], part, 'Audiobook');
+    expect(ranked[0]).toBe('The Metamorphosis – Chapter I | Franz Kafka Audiobook');
+  });
+
+  it('tells the model which part it is', async () => {
+    const llm = new FakeLLM([{ titles: ['The Metamorphosis Full Audiobook by Franz Kafka'], description: `The full audiobook of ${longText}`, primary_keyword: '', tags: [], hashtags: [], category: 'Education', thumbnail_text: 'Full Audiobook', pinned_comment: '' }]);
+    const base = templateDraft(part);
+    const d = await generatePublishDraft(llm, { ctx: part, excerpt: '' }, base, ['youtube'], base.ai);
+    expect(llm.requests[0].prompt).toContain('THIS VIDEO COVERS ONLY: Chapter I (1 of 3 chapters, pages 3–26)');
+    expect(d.youtube.title).toContain('Chapter I');
+    expect(d.youtube.description).not.toMatch(/\bfull audiobook\b/i);
+    expect(d.youtube.thumbnailText).toBe(base.youtube.thumbnailText);
   });
 });

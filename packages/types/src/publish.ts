@@ -100,7 +100,7 @@ export interface PublishAiOptions {
   keywords: string;
 }
 
-export type ThumbnailLayout = 'cover' | 'bold' | 'minimal' | 'photo';
+export type ThumbnailLayout = 'cover' | 'bold' | 'minimal' | 'photo' | 'quote' | 'player' | 'split' | 'cinematic' | 'ribbon';
 
 /** How the thumbnail is drawn (it is rendered in the browser and saved as thumbnail.jpg). */
 export interface ThumbnailDesign {
@@ -149,6 +149,46 @@ export interface PublishContext {
   aspectRatio: AspectRatio;
   hasVideo: boolean;
   hasAudio: boolean;
+  /** How much of the book the video narrates (absent = assume the whole book). */
+  coverage?: PublishCoverage;
+  /** The book's first real sentence (a hook for the thumbnail and the AI). */
+  openingLine?: string;
+}
+
+export interface PublishCoverage {
+  /** False when only part of the book was narrated (a chapter range, or chapters left out). */
+  complete: boolean;
+  /** Which part, e.g. "Chapter I" or "Chapters 1–3" (set when incomplete). */
+  label?: string;
+  narratedChapters: number;
+  /** Body chapters of the book (front and back matter not counted). */
+  totalChapters: number;
+  /** First and last narrated page. */
+  pages?: [number, number];
+  narratedWords: number;
+  totalWords: number;
+}
+
+export const isPartial = (ctx: PublishContext) => !!ctx.coverage && !ctx.coverage.complete;
+
+/** Words that promise the whole book. */
+export const WHOLE_BOOK_CLAIM: Record<LanguageCode, RegExp> = {
+  en: /\b(full|complete|unabridged|entire|whole)\b/i,
+  bn: /সম্পূর্ণ|পুরো|পূর্ণাঙ্গ/,
+};
+
+const NUMERAL = /^([ivxlcdm]+|\d+)\.?$/i;
+const NAMED_PART = /^(chapter|part|book|section|volume|অধ্যায়|পর্ব|খণ্ড)(\s|$)/i;
+
+/** "I" → "Chapter I", "Part One" stays; several → "Chapters 1–3" / "Part One – Part Two". */
+export function partLabel(titles: string[], lang: LanguageCode): string {
+  const word = lang === 'bn' ? 'অধ্যায়' : 'Chapter';
+  const one = (t: string) => (NAMED_PART.test(t) ? t : NUMERAL.test(t) ? `${word} ${t.replace(/\.$/, '')}` : t);
+  if (titles.length <= 1) return one(titles[0] ?? '');
+  const first = titles[0];
+  const last = titles[titles.length - 1];
+  if (NUMERAL.test(first) && NUMERAL.test(last)) return `${lang === 'bn' ? 'অধ্যায়' : 'Chapters'} ${first.replace(/\.$/, '')}–${last.replace(/\.$/, '')}`;
+  return `${one(first)} – ${one(last)}`;
 }
 
 export interface AppliedFile {
@@ -166,8 +206,28 @@ export interface EmbeddedTags {
   chapters: number;
 }
 
+/** A saved version of the draft (kept so it can be compared with and restored). */
+export interface PublishVersion {
+  at: string;
+  /** How it was made, e.g. "Rules", "AI · qwen3:4b", "Edited". */
+  label: string;
+  draft: PublishDraft;
+}
+
+/** POST …/publish/generate: the AI's version of the draft — not saved until accepted. */
+export interface GeneratePublishResult {
+  proposal: PublishDraft;
+  model: string;
+}
+
 export interface PublishState {
   draft: PublishDraft;
+  /** How the current draft was made ("Rules", "AI · qwen3:4b", "Edited"…). */
+  label: string;
+  /** Earlier saved versions, newest first. */
+  history: PublishVersion[];
+  /** The rule-based draft for this book (to start over or compare with). */
+  template: PublishDraft;
   /** False while the draft is the rule-based starting point nobody has saved yet. */
   saved: boolean;
   context: PublishContext;
@@ -394,6 +454,41 @@ export function seoReport(draft: PublishDraft, ctx: PublishContext, extra: { thu
     else add({ id: 'title-keyword', area: 'title', status: 'pass', label: 'Main phrase leads the title', detail: `“${yt.primaryKeyword.trim()}” is near the start.`, weight: 3 });
   }
 
+  // Say what it is: people search "<title> audiobook" and the author's name.
+  const word = yt.language === 'bn' ? 'অডিওবুক' : 'audiobook';
+  const surname = ctx.author?.trim().split(/\s+/).pop();
+  const missing = [phraseIndex(title, word) < 0 ? `“${word}”` : '', surname && phraseIndex(title, surname) < 0 ? 'the author' : ''].filter(Boolean);
+  if (tlen)
+    add(
+      missing.length
+        ? { id: 'title-format', area: 'title', status: 'warn', label: `Add ${missing.join(' and ')} to the title`, detail: 'People search for the book with “audiobook” and the author’s name.', weight: 2 }
+        : { id: 'title-format', area: 'title', status: 'pass', label: 'Title says what it is', detail: 'Book, author and “audiobook” are all in the title.', weight: 2 },
+    );
+
+  // A partial narration must not promise the whole book.
+  if (isPartial(ctx)) {
+    const claim = WHOLE_BOOK_CLAIM[yt.language] ?? WHOLE_BOOK_CLAIM.en;
+    const part = ctx.coverage!.label ?? 'part of the book';
+    const where = [
+      claim.test(title) ? 'title' : '',
+      claim.test(yt.description) ? 'description' : '',
+      claim.test(`${yt.thumbnailText} ${draft.thumbnail?.kicker ?? ''}`) ? 'thumbnail' : '',
+      claim.test(draft.file.comment) ? 'file comment' : '',
+    ].filter(Boolean);
+    if (where.length)
+      add({
+        id: 'scope',
+        area: where[0] === 'thumbnail' ? 'thumbnail' : where[0] === 'file comment' ? 'file' : where[0] === 'description' ? 'description' : 'title',
+        status: 'fail',
+        label: `Says “full”, but only ${part} is narrated`,
+        detail: `Remove “full/complete” from the ${where.join(', ')}. Viewers who expect the whole book leave early, and YouTube treats misleading titles as spam.`,
+        weight: 3,
+      });
+    else if (phraseIndex(title, part) < 0)
+      add({ id: 'scope', area: 'title', status: 'warn', label: 'Say which part this is', detail: `Add “${part}” to the title, so viewers know what they get.`, weight: 3 });
+    else add({ id: 'scope', area: 'title', status: 'pass', label: 'Honest about the part', detail: `The title says this is ${part}.`, weight: 3 });
+  }
+
   const brackets = /[<>]/.test(title) || /[<>]/.test(desc);
   if (brackets) add({ id: 'brackets', area: 'description', status: 'fail', label: 'Remove < and >', detail: 'YouTube rejects titles and descriptions that contain angle brackets.', weight: 2 });
 
@@ -410,6 +505,10 @@ export function seoReport(draft: PublishDraft, ctx: PublishContext, extra: { thu
     if (phraseIndex(snippet, kw) >= 0) add({ id: 'desc-hook', area: 'description', status: 'pass', label: 'Strong opening line', detail: 'The main phrase appears in the part shown in search results.', weight: 2 });
     else add({ id: 'desc-hook', area: 'description', status: 'warn', label: 'Opening line misses the main phrase', detail: `Only the first ~${YOUTUBE_LIMITS.descriptionSnippet} characters show in search — mention “${yt.primaryKeyword.trim()}” there.`, weight: 2 });
   }
+
+  if (/subscribe|comment|সাবস্ক্রাইব|কমেন্ট|মন্তব্য/i.test(yt.description))
+    add({ id: 'desc-cta', area: 'description', status: 'pass', label: 'Call to action', detail: 'The description asks viewers to subscribe and comment.', weight: 1 });
+  else add({ id: 'desc-cta', area: 'description', status: 'warn', label: 'Ask viewers to act', detail: 'End the description by asking viewers to subscribe and comment — engagement helps ranking.', weight: 1 });
 
   // Chapters
   const chProblem = chaptersProblem(ctx.chapters);

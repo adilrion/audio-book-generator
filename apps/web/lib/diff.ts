@@ -37,3 +37,37 @@ export function diffText(before: string, after: string): DiffPart[] {
   }
   return parts;
 }
+
+/**
+ * Word diff for longer text (titles, descriptions, posts): whole words change, so marking whole
+ * words reads better than characters. Whitespace is kept as its own token.
+ */
+export function diffWords(before: string, after: string): DiffPart[] {
+  const a = before.split(/(\s+)/).filter(Boolean);
+  const b = after.split(/(\s+)/).filter(Boolean);
+  const n = a.length;
+  const m = b.length;
+  if (n * m > 400_000)
+    return [
+      { type: 'removed', text: before },
+      { type: 'added', text: after },
+    ];
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const parts: DiffPart[] = [];
+  const push = (type: DiffPart['type'], t: string) => {
+    const last = parts[parts.length - 1];
+    if (last?.type === type) last.text += t;
+    else parts.push({ type, text: t });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      push('same', a[i++]);
+      j++;
+    } else if (j < m && (i >= n || dp[i][j + 1] > dp[i + 1][j])) push('added', b[j++]);
+    else push('removed', a[i++]);
+  }
+  return parts;
+}

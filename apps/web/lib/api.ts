@@ -11,6 +11,7 @@ import type {
   ProjectSettings,
   ProjectSummary,
   GeneratePublishRequest,
+  GeneratePublishResult,
   PublishDraft,
   PublishState,
   StepRecord,
@@ -172,10 +173,11 @@ export const api = {
   deleteProject: (id: string, deleteOutputs: boolean) =>
     request<{ ok: boolean; outputsKept: boolean }>(`/projects/${encodeURIComponent(id)}?deleteOutputs=${deleteOutputs ? 'true' : 'false'}`, { method: 'DELETE' }),
   publish: (id: string, signal?: AbortSignal) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish`, { signal }),
-  savePublish: (id: string, draft: PublishDraft) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish`, json('PUT', { draft })),
-  /** Local AI writing; can take a minute. Aborting the signal stops the model. */
+  /** `label` names the saved version in the history ("Edited", "AI · qwen3:4b", "Restored…"). */
+  savePublish: (id: string, draft: PublishDraft, label?: string) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish`, json('PUT', { draft, label })),
+  /** Local AI writing; can take a minute. Aborting the signal stops the model. Returns a proposal — nothing is saved. */
   generatePublish: (id: string, body: GeneratePublishRequest, signal?: AbortSignal) =>
-    request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/generate`, { ...json('POST', body), signal }),
+    request<GeneratePublishResult>(`/projects/${encodeURIComponent(id)}/publish/generate`, { ...json('POST', body), signal }),
   applyPublish: (id: string) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/apply`, { method: 'POST' }),
   uploadThumbnail: (id: string, jpeg: Blob) =>
     request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/thumbnail`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg }),

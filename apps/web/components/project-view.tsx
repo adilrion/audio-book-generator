@@ -403,7 +403,7 @@ export function ProjectView({ id, initialTime, initialTab }: { id: string; initi
         </TabsContent>
 
         <TabsContent value="publish" forceMount className="data-[state=inactive]:hidden">
-          <PublishPanel project={p} phase={phase} onDirtyChange={setPublishDirty} />
+          <PublishPanel project={p} phase={phase} onDirtyChange={setPublishDirty} onOpenSettings={() => setTab('settings')} />
         </TabsContent>
 
         <TabsContent value="settings" forceMount className="data-[state=inactive]:hidden">

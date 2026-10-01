@@ -10,7 +10,7 @@ import type { PrismaService } from '../src/prisma/prisma.service';
 import { downloadName } from '../src/projects/projects.controller';
 import type { ProjectsService } from '../src/projects/projects.service';
 import { publishDraftSchema } from '../src/publish/publish.schema';
-import { PublishService, excerptOf } from '../src/publish/publish.service';
+import { PublishService, excerptOf, openingLineOf } from '../src/publish/publish.service';
 
 const hasFfmpeg = (() => {
   try {
@@ -40,6 +40,8 @@ const timeline: Timeline = {
   ],
 };
 
+let chapters = [{ index: 0, title: 'One', pageStart: 1, pageEnd: 1, wordCount: 9 }];
+
 function setup(status = 'COMPLETED', queued = 0) {
   const outputs = async (): Promise<OutputFile[]> =>
     ['audiobook.mp4', 'audiobook.m4a']
@@ -48,6 +50,7 @@ function setup(status = 'COMPLETED', queued = 0) {
   const projects = {
     get: async () => ({ id: ID, name: 'The Metamorphosis', status, settings: DEFAULT_SETTINGS, durationSec: 2, document: { author: 'Franz Kafka', pageCount: 3, estimatedWords: 300 } }),
     outputs,
+    chapters: async () => chapters,
     pageImage: async () => {
       throw new Error('no renderer in tests');
     },
@@ -80,6 +83,14 @@ describe('publish draft schema', () => {
 });
 
 describe('excerpt', () => {
+  it('finds the opening line for the thumbnail', () => {
+    expect(openingLineOf(timeline)).toBeUndefined(); // both sentences are too short to be a hook
+    const seg = { ...timeline.segments[0], text: 'One morning, as Gregor Samsa was waking up from anxious dreams, he discovered that in bed he had been changed into a monstrous verminous bug, and more.' };
+    const line = openingLineOf({ ...timeline, segments: [{ ...seg, text: 'I' }, seg] });
+    expect(line?.startsWith('One morning, as Gregor Samsa')).toBe(true);
+    expect(line!.length).toBeLessThanOrEqual(160);
+  });
+
   it('takes the narrated opening, whole sentences only', () => {
     expect(excerptOf(timeline, 'en')).toBe('One morning Gregor woke. He was a bug.');
     expect(excerptOf({ ...timeline, segments: [{ ...timeline.segments[0], text: 'x'.repeat(4000) }] }, 'en')).toBe('');
@@ -89,6 +100,7 @@ describe('excerpt', () => {
 
 describe.skipIf(!hasFfmpeg)('PublishService', () => {
   beforeEach(() => {
+    chapters = [{ index: 0, title: 'One', pageStart: 1, pageEnd: 1, wordCount: 9 }];
     fs.rmSync(out, { recursive: true, force: true });
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(path.join(out, 'timeline.json'), JSON.stringify(timeline));
@@ -102,6 +114,9 @@ describe.skipIf(!hasFfmpeg)('PublishService', () => {
     expect(s.context).toMatchObject({ title: 'The Metamorphosis', author: 'Franz Kafka', durationSec: 2, hasVideo: true, hasAudio: false });
     expect(s.llm).toMatchObject({ enabled: false, available: false });
     expect(s.embedded.map((e) => e.name)).toEqual(['audiobook.mp4']);
+    expect(s.context.coverage).toMatchObject({ complete: true, narratedWords: 8, totalWords: 9 });
+    expect(s.label).toBe('Rules');
+    expect(s.template.youtube.title).toBe(s.draft.youtube.title);
     await expect(setup().generate(ID, { sections: ['youtube'] })).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
@@ -121,6 +136,27 @@ describe.skipIf(!hasFfmpeg)('PublishService', () => {
     // A later run re-creates the video: the embedded tags are gone.
     execFileSync('ffmpeg', ['-hide_banner', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10:duration=2', '-f', 'lavfi', '-i', 'sine=duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path.join(out, 'audiobook.mp4')]);
     expect((await svc.state(ID)).applied?.stale).toEqual(['files', 'draft']);
+  });
+
+  it('marks a partial narration and keeps every saved version', async () => {
+    chapters = [
+      { index: 0, title: 'One', pageStart: 1, pageEnd: 1, wordCount: 9 },
+      { index: 1, title: 'Two', pageStart: 2, pageEnd: 2, wordCount: 40 },
+    ];
+    const svc = setup();
+    const s0 = await svc.state(ID);
+    expect(s0.context.coverage).toMatchObject({ complete: false, label: 'One', narratedChapters: 1, totalChapters: 2, pages: [1, 1] });
+    expect(s0.draft.youtube.title).toContain('– One');
+
+    const v1 = { ...s0.draft, youtube: { ...s0.draft.youtube, title: 'First title' } };
+    await svc.save(ID, { draft: v1 });
+    const s2 = await svc.save(ID, { draft: { ...v1, youtube: { ...v1.youtube, title: 'AI title' } }, label: 'AI · qwen3:4b' });
+    expect(s2.label).toBe('AI · qwen3:4b');
+    expect(s2.history.map((h) => [h.label, h.draft.youtube.title])).toEqual([['Edited', 'First title']]);
+    // Saving the same draft again neither adds a version nor relabels it.
+    const s3 = await svc.save(ID, { draft: s2.draft });
+    expect(s3.history).toHaveLength(1);
+    expect(s3.label).toBe('AI · qwen3:4b');
   });
 
   it('refuses to apply while the project is processing or queued', async () => {

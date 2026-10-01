@@ -9,8 +9,11 @@ import {
   SOCIAL_PLATFORMS,
   SOCIAL_RULES,
   YOUTUBE_CATEGORIES,
+  WHOLE_BOOK_CLAIM,
   YOUTUBE_LIMITS,
   fitHashtags,
+  isPartial,
+  phraseIndex,
   fitTags,
   sanitizeTag,
   socialLength,
@@ -57,8 +60,14 @@ function facts(src: PublishSource, opts: PublishAiOptions): string {
     .map((k) => k.trim())
     .filter(Boolean)
     .slice(0, 10);
+  const cov = c.coverage;
+  const scope =
+    cov && !cov.complete
+      ? `THIS VIDEO COVERS ONLY: ${cov.label ?? 'part of the book'}${cov.totalChapters ? ` (${cov.narratedChapters} of ${cov.totalChapters} chapters` : ' ('}${cov.pages ? `, pages ${cov.pages[0]}–${cov.pages[1]}` : ''}). It is NOT the whole book: never call it "full", "complete", "unabridged" or "the entire book"; say which part it is, and invite viewers to come back for the next chapter.`
+      : 'THIS VIDEO COVERS: the whole book, narrated from start to finish.';
   return [
-    `VIDEO: a complete audiobook of the book below, narrated by a text-to-speech voice, with every sentence highlighted on the printed page as it is read (a "read-along" video). Runtime: ${duration(c.durationSec)}.`,
+    `VIDEO: an audiobook of the book below, narrated by a natural text-to-speech voice, with the book's own pages on screen and each sentence highlighted as it is spoken, so viewers can follow the text. Runtime: ${duration(c.durationSec)}.`,
+    scope,
     `BOOK TITLE: ${c.title}`,
     c.author ? `AUTHOR: ${c.author}` : 'AUTHOR: unknown',
     `BOOK LANGUAGE: ${c.language === 'bn' ? 'Bangla (Bengali)' : 'English'}`,
@@ -137,7 +146,7 @@ function recase(tags: string[], known: string[]): string[] {
 
 function knownHashtags(ctx: PublishContext): string[] {
   const words = [ctx.title, ctx.author ?? '', ...ctx.title.split(/\s+/), ...(ctx.author ?? '').split(/\s+/)].filter(Boolean);
-  return [...words.map(camelTag), 'Audiobook', 'Audiobooks', 'ReadAlong', 'FullAudiobook', 'BookTok', 'Bookstagram', 'BookLovers', 'Books', 'Reading', 'Literature', 'ClassicLiterature', 'Classics', 'BookClub', 'Learning', 'BanglaAudiobook'];
+  return [...words.map(camelTag), 'Audiobook', 'Audiobooks', 'AudiobookWithText', 'FullAudiobook', 'BookTok', 'Bookstagram', 'BookLovers', 'Books', 'Reading', 'Literature', 'ClassicLiterature', 'Classics', 'BookClub', 'Learning', 'BanglaAudiobook'];
 }
 
 /** Calls to action that only make sense on some platforms. */
@@ -169,17 +178,31 @@ interface YouTubeAnswer {
 
 export async function generateYouTube(provider: LLMProvider, src: PublishSource, opts: PublishAiOptions, base: YouTubeDraft, signal?: AbortSignal): Promise<YouTubeDraft> {
   const word = opts.language === 'bn' ? 'অডিওবুক' : 'Audiobook';
+  const partial = isPartial(src.ctx);
+  const part = src.ctx.coverage?.label;
+  const english = opts.language !== 'bn';
   const prompt =
-    `Write YouTube metadata for this video.\n\n${facts(src, opts)}\n\n${languageRule(opts.language)}\n` +
+    `Write YouTube metadata that ranks in search AND makes people want to watch.\n\n${facts(src, opts)}\n\n${languageRule(opts.language)}\n` +
     'Rules:\n' +
-    `- titles: 3 different YouTube titles, each 45–70 characters. Put the book title near the start, include the author's name if known and the word "${word}". No clickbait, no ALL CAPS, no emojis.\n` +
-    `- description: 150–250 words in 2–4 short paragraphs separated by a blank line. The first sentence must contain the book title, the author and the word "${word.toLowerCase()}" (it is the part shown in search results). Then say what the book is about without spoilers beyond the opening, who will enjoy it, and that the text is highlighted on the page so viewers can read along. Do NOT list chapters, timestamps, hashtags or links.\n` +
+    `- titles: 3 different titles, 45–70 characters, in Title Case, each starting with the book title and containing the word "${word}"` +
+    `${partial && part ? ` and "${part}"` : ''}:\n` +
+    `  1) the search format: "<book title>${partial ? ` – ${part ?? '<part>'}` : ''} by <author> | ${partial ? '' : 'Full '}${word} with Text";\n` +
+    `  2) "<book title> ${word} | " followed by a short, intriguing hook from the book's premise (no spoilers beyond the opening);\n` +
+    '  3) your best alternative that makes people curious. Include the author where it fits.\n' +
+    '  No false promises, no ALL CAPS, no emojis.\n' +
+    `- description: 170–260 words in 3–4 short paragraphs separated by a blank line.\n` +
+    `  Paragraph 1 (shown in search results — make it count): one or two sentences that hook the viewer with the premise or why the book matters, containing the book title, the author and the word "${word.toLowerCase()}".\n` +
+    '  Paragraph 2: what the book is about and why it is worth hearing — premise only, no spoilers beyond the opening.\n' +
+    `  Paragraph 3: what the viewer gets: ${partial ? `this part of the book (${part ?? 'one part'})` : 'the complete book'} narrated, with the pages on screen and each sentence highlighted, so it is easy to follow${english ? ' (also great for improving reading and English)' : ''}.\n` +
+    `  Last line: a short call to action — subscribe${partial ? ' so they do not miss the next chapter' : ' for more audiobooks'} and comment.\n` +
+    '  Do NOT list chapters, timestamps, hashtags or links.\n' +
     `- primary_keyword: the main search phrase, usually "<book title> ${word.toLowerCase()}".\n` +
-    '- tags: 15–25 search phrases people would type: the title, the author, "<title> audiobook", genre, themes, "full audiobook", "audiobook with text", "read along". No "#".\n' +
-    '- hashtags: 3–5 hashtags without "#" and without spaces (CamelCase).\n' +
+    `- tags: 15–25 search phrases people type: the title, the author, "<title> audiobook", "<author> audiobook", genre, themes${partial ? `, "<title> ${part ?? 'chapter 1'}"` : ', "full audiobook"'}, "audiobook with text", "audiobook with subtitles". No "#".\n` +
+    '- hashtags: 3–5 real hashtags people search, without "#" or spaces, in CamelCase (e.g. the book title, the author, the genre). No invented combinations.\n' +
     `- category: one of ${YOUTUBE_CATEGORIES.map((c) => `"${c.label}"`).join(', ')}.\n` +
-    '- thumbnail_text: 2–5 strong words for the thumbnail, usually the book title.\n' +
-    '- pinned_comment: one or two friendly sentences for the creator to pin, ending with a question that invites viewers to comment.';
+    '- thumbnail_text: 2–4 big words for the thumbnail, usually the short book title.\n' +
+    '- pinned_comment: a friendly comment for the creator to pin: one sentence about the book’s central idea, then a question that is easy and fun to answer.\n' +
+    'Never use the words "read-along" or "read along".';
   const r = await provider.generateJson<YouTubeAnswer>(
     {
       system: SYSTEM,
@@ -204,30 +227,90 @@ export async function generateYouTube(provider: LLMProvider, src: PublishSource,
     },
     signal,
   );
-  const titles = [...new Set(strings(r.titles).map(cleanTitle).filter((t) => [...t].length >= 10))];
-  const description = paragraphize(cleanText(r.description, 3800));
+  const fix = (t: string) => scrub(t, src.ctx, opts.language);
+  const titles = [...new Set(strings(r.titles).map((t) => fix(scrubTitle(cleanTitle(t)))).filter((t) => [...t].length >= 10))];
+  const description = paragraphize(fix(cleanText(r.description, 3800)));
   const keyword = sanitizeTag(typeof r.primary_keyword === 'string' ? r.primary_keyword : '');
   const baseTitleTags = base.tags.slice(0, 6); // title, author, "<title> audiobook"… always first
   const thumb = cleanTitle(r.thumbnail_text);
+  // The best-ranking title wins, so a stray model answer never beats the search format.
+  const ranked = rankTitles([...titles, base.title, ...base.titleOptions], src.ctx, word);
   return {
     ...base,
-    title: titles[0] ?? base.title,
-    titleOptions: [...new Set([...titles, base.title, ...base.titleOptions])].slice(0, 6),
+    title: ranked[0] ?? base.title,
+    titleOptions: ranked.slice(0, 6),
     description: description.split(/\s+/).length >= 40 ? description : base.description,
     tags: fitTags([...(keyword ? [keyword] : []), ...baseTitleTags, ...strings(r.tags), ...base.tags]),
-    hashtags: ensureFirstWord(recase(fitHashtags(strings(r.hashtags), 5), knownHashtags(src.ctx)), word),
+    // #Audiobook #TheBookTitle #TheAuthor first — the three YouTube shows above the title.
+    hashtags: fitHashtags(
+      [word, camelTag(src.ctx.title), ...(src.ctx.author ? [camelTag(src.ctx.author)] : []), ...recase(strings(r.hashtags), knownHashtags(src.ctx)).filter((h) => !/read_?along/i.test(h))],
+      5,
+    ),
     primaryKeyword: keyword || base.primaryKeyword,
     categoryId: CATEGORY_BY_LABEL.get(String(r.category).toLowerCase()) ?? base.categoryId,
-    thumbnailText: thumb && [...thumb].length <= 50 ? thumb : base.thumbnailText,
-    pinnedComment: cleanText(r.pinned_comment, 600) || base.pinnedComment,
+    thumbnailText: thumb && [...thumb].length <= 50 && !(partial && WHOLE_BOOK_CLAIM[opts.language].test(thumb)) ? thumb : base.thumbnailText,
+    pinnedComment: fix(cleanText(r.pinned_comment, 600)) || base.pinnedComment,
     language: opts.language,
   };
 }
 
-/** Make sure the audiobook hashtag is there (people search for it), keeping at most five. */
-function ensureFirstWord(tags: string[], word: string): string[] {
-  if (tags.some((t) => t.toLocaleLowerCase() === word.toLocaleLowerCase())) return tags;
-  return fitHashtags([word, ...tags], 5);
+/**
+ * How well a title works in search: the book title at the start, the author, the word "audiobook",
+ * a length that is not cut off — and, for a partial narration, which part it is and no "full".
+ */
+export function titleScore(title: string, ctx: PublishContext, word: string): number {
+  const len = [...title].length;
+  if (len > YOUTUBE_LIMITS.title) return -100;
+  let s = 0;
+  const at = phraseIndex(title, ctx.title);
+  if (at >= 0) s += at <= 8 ? 4 : 2;
+  const surname = ctx.author?.trim().split(/\s+/).pop();
+  if (surname && phraseIndex(title, surname) >= 0) s += 2;
+  if (phraseIndex(title, word) >= 0) s += 3;
+  if (len >= 45 && len <= YOUTUBE_LIMITS.titleVisible) s += 2;
+  else if (len >= 30 && len <= 80) s += 1;
+  if (/read[- ]?along/i.test(title)) s -= 3;
+  if ((title.match(/\b[A-Z]{4,}\b/g) ?? []).length > 1) s -= 2;
+  if (isPartial(ctx)) {
+    if (WHOLE_BOOK_CLAIM[ctx.language].test(title)) s -= 8;
+    if (ctx.coverage?.label && phraseIndex(title, ctx.coverage.label) >= 0) s += 3;
+  }
+  return s;
+}
+
+/** Unique titles, best first (ties keep their order, so the model's first choice wins a tie). */
+export function rankTitles(titles: string[], ctx: PublishContext, word: string): string[] {
+  const unique = [...new Set(titles.map((t) => t.trim()).filter(Boolean))];
+  return unique
+    .map((t, i) => ({ t, i, s: titleScore(t, ctx, word) }))
+    .filter((x) => x.s > -100)
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((x) => x.t);
+}
+
+/** Titles drop "read-along" rather than reword it: "…Audiobook with Read-Along Text" → "…Audiobook with Text". */
+export function scrubTitle(title: string): string {
+  return title
+    .replace(/\bread[- ]along\s+(text|video|audiobook)\b/gi, '$1')
+    .replace(/\s*[:|–-]?\s*\bread[- ]along\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s*[:|–-]\s*$/, '')
+    .trim();
+}
+
+/**
+ * Wording the copy must not use: "read-along" (people search for "with text") and, when only part
+ * of the book is narrated, "full / complete audiobook".
+ */
+export function scrub(text: string, ctx: PublishContext, lang: PublishAiOptions['language']): string {
+  let out = text.replace(/\b(r)ead([- ])along\b/gi, (_m, r: string, sep: string) => `${r === 'R' ? 'F' : 'f'}ollow${sep}along`);
+  if (isPartial(ctx)) {
+    out =
+      lang === 'bn'
+        ? out.replace(/(সম্পূর্ণ|পুরো|পূর্ণাঙ্গ)\s*/g, '')
+        : out.replace(/\b(full|complete|unabridged|entire|whole)[- ](length )?(audiobook|audio book|book|novel|story)\b/gi, (_m, _f, _l, noun: string) => noun);
+  }
+  return out.replace(/[ \t]{2,}/g, ' ');
 }
 
 // ─────────────────────────────── social ───────────────────────────────
@@ -251,7 +334,8 @@ export async function generateSocial(
   const post = { type: 'object', properties: { text: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['text', 'hashtags'] };
   const prompt =
     `Write social media posts announcing this video.\n\n${facts(src, opts)}\n\n${languageRule(opts.language)}\n` +
-    'One post per platform. Do not include links (the link is added automatically) and put hashtags only in the "hashtags" list, without "#". Only the Instagram post may say "link in bio".\n' +
+    'One post per platform. Open each post with a hook — a question or a striking line from the premise — so people stop scrolling. ' +
+    'Do not include links (the link is added automatically) and put hashtags only in the "hashtags" list, without "#". Only the Instagram post may say "link in bio". Never use the words "read-along" or "read along".\n' +
     SOCIAL_PLATFORMS.map((p) => `- ${p}: ${PLATFORM_RULES[p]}`).join('\n');
   const r = await provider.generateJson<Record<SocialPlatform, { text?: unknown; hashtags?: unknown }>>(
     {
@@ -269,7 +353,7 @@ export async function generateSocial(
     const rule = SOCIAL_RULES[p];
     const split = splitHashtags(cleanText(r?.[p]?.text, Math.min(rule.max, 2000)));
     const hashtags = recase(fitHashtags([...strings(r?.[p]?.hashtags), ...split.tags], rule.hashtags[1]), knownHashtags(src.ctx));
-    let draft: SocialDraft = { text: dropTrailingTag(dropForeignCta(p, split.text), hashtags), hashtags };
+    let draft: SocialDraft = { text: scrub(dropTrailingTag(dropForeignCta(p, split.text), hashtags), src.ctx, opts.language), hashtags: hashtags.filter((h) => !/read_?along/i.test(h)) };
     if ([...draft.text].length < 15) draft = { ...base[p], hashtags: hashtags.length ? hashtags : base[p].hashtags };
     // Leave room for the link and the hashtags within the platform's limit.
     while (socialLength(p, draft, videoUrl || 'https://youtu.be/xxxxxxxxxxx') > rule.max && draft.text.length > 20) {

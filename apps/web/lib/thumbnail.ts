@@ -9,11 +9,17 @@ import { type ThumbnailDesign, type ThumbnailLayout, YOUTUBE_LIMITS } from '@app
 export const THUMB_W = YOUTUBE_LIMITS.thumbnail.width;
 export const THUMB_H = YOUTUBE_LIMITS.thumbnail.height;
 
+/** Every layout keeps the book title big and readable on a phone — the first thing searchers check. */
 export const THUMB_LAYOUTS: { value: ThumbnailLayout; label: string; hint: string }[] = [
-  { value: 'cover', label: 'Cover', hint: 'Book cover on a blurred backdrop' },
-  { value: 'bold', label: 'Bold', hint: 'Big type on the accent colour' },
-  { value: 'minimal', label: 'Minimal', hint: 'Quiet serif on paper' },
-  { value: 'photo', label: 'Full image', hint: 'The image fills the frame' },
+  { value: 'cover', label: 'Cover', hint: 'Book cover on a blurred backdrop — a safe, classic choice' },
+  { value: 'player', label: 'Listen now', hint: 'Play button and sound wave: says “audiobook” at a glance' },
+  { value: 'quote', label: 'Opening line', hint: 'The book’s first sentence as a hook — makes people curious' },
+  { value: 'bold', label: 'Bold', hint: 'Huge title on the accent colour — stands out in a feed' },
+  { value: 'split', label: 'Split', hint: 'Title panel next to the cover art' },
+  { value: 'cinematic', label: 'Cinematic', hint: 'Centred title, film-poster look' },
+  { value: 'ribbon', label: 'Ribbon', hint: 'Corner ribbon with the format, cover on the left' },
+  { value: 'minimal', label: 'Minimal', hint: 'Quiet serif on paper — literary classics' },
+  { value: 'photo', label: 'Full image', hint: 'Your image fills the frame' },
 ];
 
 export const THUMB_ACCENTS = ['#FFD54F', '#FF7043', '#EF5350', '#AB47BC', '#42A5F5', '#26A69A', '#9CCC65', '#F5F5F5'];
@@ -23,9 +29,11 @@ export const DEFAULT_DESIGN: ThumbnailDesign = { layout: 'cover', kicker: 'Full 
 export interface ThumbContent {
   title: string;
   author?: string;
-  /** e.g. "38 min · Read-along" */
+  /** e.g. "38 min · With text" */
   badge: string;
   image: HTMLImageElement | null;
+  /** The book's first sentence, for the "Opening line" layout. */
+  quote?: string;
   fonts: { serif: string; sans: string };
 }
 
@@ -165,6 +173,238 @@ function book(ctx: CanvasRenderingContext2D, img: HTMLImageElement | null, x: nu
   return w;
 }
 
+/** A stable 0..1 sequence from a string (the same title always draws the same sound wave). */
+function seeded(seed: string) {
+  let h = 2166136261;
+  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 16) >>> 0) / 4294967296;
+  };
+}
+
+function darker(hex: string, f: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const c = (v: number) => Math.round(v * f);
+  return `rgb(${c((n >> 16) & 255)} ${c((n >> 8) & 255)} ${c(n & 255)})`;
+}
+
+function backdrop(ctx: CanvasRenderingContext2D, img: HTMLImageElement | null, W: number, H: number, shade: number) {
+  ctx.fillStyle = '#121212';
+  ctx.fillRect(0, 0, W, H);
+  if (img) blurred(ctx, img, W, H);
+  ctx.fillStyle = `rgba(8,8,8,${shade})`;
+  ctx.fillRect(0, 0, W, H);
+}
+
+/** Title (+ author) block, left-aligned at x; returns the y below it. */
+function titleBlock(ctx: CanvasRenderingContext2D, o: { title: string; author?: string; x: number; y: number; width: number; maxLines: number; max: number; min: number; font: (px: number) => string; color: string; authorColor: string; authorFont: string; lead?: number }) {
+  const r = fit(ctx, o.title, { width: o.width, maxLines: o.maxLines, max: o.max, min: o.min, font: o.font });
+  ctx.font = r.font;
+  ctx.fillStyle = o.color;
+  const lead = o.lead ?? 1.02;
+  r.lines.forEach((l, i) => ctx.fillText(l, o.x, o.y + r.size * 0.86 + i * r.size * lead));
+  let y = o.y + r.lines.length * r.size * lead;
+  if (o.author) {
+    ctx.font = o.authorFont;
+    ctx.fillStyle = o.authorColor;
+    ctx.fillText(o.author, o.x + 4, y + 44);
+    y += 60;
+  }
+  return y;
+}
+
+function drawPlayer(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbContent, title: string, kicker: string) {
+  const W = THUMB_W;
+  const H = THUMB_H;
+  const { serif, sans } = c.fonts;
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, darker(d.accent, 0.42));
+  g.addColorStop(1, '#0B0B0C');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  book(ctx, c.image, 70, 95, 530, d.accent, title, serif);
+  const x = 520;
+  let y = 120;
+  if (kicker) {
+    pill(ctx, kicker.toUpperCase(), x, y, { bg: d.accent, fg: inkOn(d.accent), font: `800 26px ${sans}`, h: 50 });
+    y += 76;
+  }
+  y = titleBlock(ctx, { title, author: d.showAuthor ? c.author : undefined, x, y, width: 700, maxLines: 3, max: 104, min: 50, font: (px) => `800 ${px}px ${sans}`, color: '#fff', authorColor: 'rgba(255,255,255,0.78)', authorFont: `500 38px ${sans}`, lead: 1 });
+  // Player: play button, sound wave, time.
+  const py = Math.max(y + 40, H - 170);
+  ctx.beginPath();
+  ctx.arc(x + 46, py + 46, 46, 0, Math.PI * 2);
+  ctx.fillStyle = d.accent;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x + 34, py + 24);
+  ctx.lineTo(x + 34, py + 68);
+  ctx.lineTo(x + 70, py + 46);
+  ctx.closePath();
+  ctx.fillStyle = inkOn(d.accent);
+  ctx.fill();
+  const rand = seeded(title);
+  const bars = 34;
+  for (let i = 0; i < bars; i++) {
+    const h = 14 + Math.round(rand() * 60);
+    ctx.fillStyle = i < bars * 0.35 ? d.accent : 'rgba(255,255,255,0.35)';
+    roundRect(ctx, x + 120 + i * 17, py + 46 - h / 2, 9, h, 4);
+    ctx.fill();
+  }
+  if (d.showBadge) {
+    ctx.font = `700 28px ${sans}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(c.badge, x + 4, py + 136);
+  }
+}
+
+function drawQuote(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbContent, title: string, kicker: string) {
+  const W = THUMB_W;
+  const H = THUMB_H;
+  const { serif, sans } = c.fonts;
+  backdrop(ctx, c.image, W, H, 0.78);
+  ctx.fillStyle = d.accent;
+  ctx.font = `700 260px ${serif}`;
+  ctx.fillText('“', 40, 250);
+  const quote = (c.quote ?? '').trim() || title;
+  const q = fit(ctx, quote, { width: 1100, maxLines: 4, max: 76, min: 44, font: (px) => `italic 500 ${px}px ${serif}` });
+  ctx.font = q.font;
+  ctx.fillStyle = '#fff';
+  let y = 200;
+  q.lines.forEach((l, i) => ctx.fillText(l, 90, y + q.size * 0.86 + i * q.size * 1.12));
+  y += q.lines.length * q.size * 1.12 + 40;
+  ctx.fillStyle = d.accent;
+  ctx.fillRect(94, y, 80, 6);
+  y += 26;
+  const t = fit(ctx, title.toUpperCase(), { width: 760, maxLines: 1, max: 56, min: 30, font: (px) => `800 ${px}px ${sans}` });
+  ctx.font = t.font;
+  ctx.fillStyle = '#fff';
+  ctx.fillText(t.lines[0] ?? '', 92, y + t.size * 0.86);
+  let bx = 92;
+  const by = H - 92;
+  if (kicker) bx += pill(ctx, kicker.toUpperCase(), bx, by, { bg: d.accent, fg: inkOn(d.accent), font: `800 24px ${sans}`, h: 46 }) + 14;
+  if (d.showAuthor && c.author) {
+    ctx.font = `500 34px ${sans}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(c.author, bx + 6, by + 24);
+    bx += ctx.measureText(c.author).width + 34;
+    ctx.textBaseline = 'alphabetic';
+  }
+  if (d.showBadge) pill(ctx, c.badge, Math.max(bx, W - 420), by, { bg: 'rgba(255,255,255,0.14)', fg: '#fff', font: `700 24px ${sans}`, h: 46 });
+}
+
+function drawSplit(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbContent, title: string, kicker: string) {
+  const W = THUMB_W;
+  const H = THUMB_H;
+  const { sans } = c.fonts;
+  const ink = inkOn(d.accent);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(640, 0);
+  ctx.lineTo(W, 0);
+  ctx.lineTo(W, H);
+  ctx.lineTo(560, H);
+  ctx.closePath();
+  ctx.clip();
+  if (c.image) cover(ctx, c.image, 560, 0, W - 560, H, 0.2);
+  ctx.restore();
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(660, 0);
+  ctx.lineTo(580, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  ctx.fillStyle = d.accent;
+  ctx.fill();
+  let y = 90;
+  if (kicker) {
+    pill(ctx, kicker.toUpperCase(), 56, y, { bg: ink, fg: d.accent, font: `800 26px ${sans}`, h: 50 });
+    y += 82;
+  }
+  y = titleBlock(ctx, { title: title.toUpperCase(), author: d.showAuthor ? c.author : undefined, x: 52, y, width: 500, maxLines: 4, max: 112, min: 48, font: (px) => `900 ${px}px ${sans}`, color: ink, authorColor: ink, authorFont: `600 36px ${sans}`, lead: 0.98 });
+  if (d.showBadge) pill(ctx, c.badge, 56, H - 100, { bg: ink, fg: d.accent, font: `700 26px ${sans}`, h: 50 });
+}
+
+function drawCinematic(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbContent, title: string, kicker: string) {
+  const W = THUMB_W;
+  const H = THUMB_H;
+  const { serif, sans } = c.fonts;
+  backdrop(ctx, c.image, W, H, 0.6);
+  const v = ctx.createRadialGradient(W / 2, H / 2, 120, W / 2, H / 2, 760);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, 'rgba(0,0,0,0.75)');
+  ctx.fillStyle = v;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, 64);
+  ctx.fillRect(0, H - 64, W, 64);
+  ctx.textAlign = 'center';
+  let y = 170;
+  if (kicker) {
+    ctx.font = `700 28px ${sans}`;
+    ctx.letterSpacing = '10px';
+    ctx.fillStyle = d.accent;
+    ctx.fillText(kicker.toUpperCase(), W / 2, y);
+    ctx.letterSpacing = '0px';
+    y += 30;
+  }
+  const r = fit(ctx, title, { width: 1080, maxLines: 2, max: 140, min: 60, font: (px) => `600 ${px}px ${serif}` });
+  ctx.font = r.font;
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 24;
+  r.lines.forEach((l, i) => ctx.fillText(l, W / 2, y + r.size * 0.9 + i * r.size * 1.02));
+  ctx.shadowBlur = 0;
+  y += r.lines.length * r.size * 1.02 + 24;
+  ctx.fillStyle = d.accent;
+  ctx.fillRect(W / 2 - 60, y, 120, 5);
+  if (d.showAuthor && c.author) {
+    ctx.font = `italic 400 44px ${serif}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillText(c.author, W / 2, y + 62);
+  }
+  ctx.textAlign = 'left';
+  if (d.showBadge) {
+    ctx.font = `700 24px ${sans}`;
+    const w = ctx.measureText(c.badge).width + 44;
+    pill(ctx, c.badge, (W - w) / 2, H - 140, { bg: 'rgba(255,255,255,0.16)', fg: '#fff', font: `700 24px ${sans}`, h: 46 });
+  }
+}
+
+function drawRibbon(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbContent, title: string, kicker: string) {
+  const W = THUMB_W;
+  const H = THUMB_H;
+  const { serif, sans } = c.fonts;
+  backdrop(ctx, c.image, W, H, 0.72);
+  book(ctx, c.image, 80, 80, 560, d.accent, title, serif);
+  const x = 560;
+  let y = Math.max(150, 0);
+  y = titleBlock(ctx, { title, author: d.showAuthor ? c.author : undefined, x, y, width: 660, maxLines: 4, max: 110, min: 50, font: (px) => `600 ${px}px ${serif}`, color: '#fff', authorColor: 'rgba(255,255,255,0.85)', authorFont: `500 40px ${sans}` });
+  if (d.showBadge) pill(ctx, c.badge, x + 2, Math.min(H - 110, y + 30), { bg: 'rgba(255,255,255,0.14)', fg: '#fff', font: `700 26px ${sans}`, h: 48 });
+  if (kicker) {
+    ctx.save();
+    ctx.translate(W - 150, 150);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = d.accent;
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 18;
+    ctx.fillRect(-330, -38, 660, 76);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = inkOn(d.accent);
+    ctx.textAlign = 'center';
+    const k = fit(ctx, kicker.toUpperCase(), { width: 300, maxLines: 1, max: 34, min: 18, font: (px) => `900 ${px}px ${sans}` });
+    ctx.font = k.font;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(k.lines[0] ?? '', 0, 2);
+    ctx.restore();
+  }
+}
+
 export function drawThumbnail(ctx: CanvasRenderingContext2D, d: ThumbnailDesign, c: ThumbContent): void {
   const W = THUMB_W;
   const H = THUMB_H;
@@ -173,6 +413,14 @@ export function drawThumbnail(ctx: CanvasRenderingContext2D, d: ThumbnailDesign,
   const kicker = d.kicker.trim();
   ctx.clearRect(0, 0, W, H);
   ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.letterSpacing = '0px';
+  ctx.shadowBlur = 0;
+  if (d.layout === 'player') return drawPlayer(ctx, d, c, title, kicker);
+  if (d.layout === 'quote') return drawQuote(ctx, d, c, title, kicker);
+  if (d.layout === 'split') return drawSplit(ctx, d, c, title, kicker);
+  if (d.layout === 'cinematic') return drawCinematic(ctx, d, c, title, kicker);
+  if (d.layout === 'ribbon') return drawRibbon(ctx, d, c, title, kicker);
 
   if (d.layout === 'bold') {
     const ink = inkOn(d.accent);
