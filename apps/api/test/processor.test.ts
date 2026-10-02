@@ -132,7 +132,7 @@ function table(rows: Row[]) {
 const cfg = loadConfig();
 const document = { id: 'doc-1', filePath: '/tmp/book.pdf', hash: 'h' };
 
-function setup(state: { projects: Row[]; renderJobs: Row[]; steps?: Row[] }) {
+function setup(state: { projects: Row[]; renderJobs: Row[]; steps?: Row[]; shorts?: Row[] }) {
   const project = table(state.projects.map((p) => ({ cancelRequested: false, settings: {}, name: 'Book', snapshot: null, progress: 0, documentId: 'doc-1', ...p })));
   const renderJob = table(state.renderJobs);
   const processingStep = table(state.steps ?? []);
@@ -143,9 +143,10 @@ function setup(state: { projects: Row[]; renderJobs: Row[]; steps?: Row[] }) {
       return r && args.include?.document ? { ...r, document } : r;
     },
   };
-  const prisma = { project: withDoc, renderJob, processingStep };
+  const short = table(state.shorts ?? []);
+  const prisma = { project: withDoc, renderJob, processingStep, short };
   const worker = new ProcessingWorker(cfg, prisma as unknown as PrismaService);
-  return { worker, project, renderJob, processingStep };
+  return { worker, project, renderJob, processingStep, short };
 }
 
 async function boot(w: ProcessingWorker) {
@@ -242,8 +243,14 @@ describe('ProcessingWorker', () => {
         { id: 'rj3', projectId: 'p3', status: 'PENDING' },
       ],
       steps: [{ projectId: 'p1', key: 'VIDEO_CHAPTER_1', status: 'RUNNING' }],
+      shorts: [
+        { id: 's1', status: 'RENDERING' },
+        { id: 's2', status: 'COMPLETED' },
+      ],
     });
     await boot(t.worker);
+    expect(t.short.rows.map((s) => s.status)).toEqual(['FAILED', 'COMPLETED']);
+    expect((t.short.rows[0].snapshot as { error: unknown }).error).toMatchObject({ code: 'INTERRUPTED', retryable: true });
     const byId = (id: string) => t.project.rows.find((p) => p.id === id)!;
     for (const id of ['p1', 'p2']) {
       expect(byId(id).status).toBe('FAILED');

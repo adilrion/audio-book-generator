@@ -18,6 +18,11 @@ import type {
   LibrarySearchResult,
   PublishDraft,
   PublishState,
+  ShortDetail,
+  ShortScriptRequest,
+  ShortScriptResult,
+  ShortSettings,
+  ShortSummary,
   StepRecord,
   TextRepair,
   Timeline,
@@ -165,6 +170,18 @@ export interface LibrarySearchParams {
   page?: number;
 }
 
+/** Body of POST /shorts and PATCH /shorts/:id. */
+export interface ShortInput {
+  title?: string;
+  script?: string;
+  description?: string;
+  hashtags?: string[];
+  settings?: Partial<ShortSettings>;
+  projectId?: string | null;
+  /** Start rendering right away. */
+  render?: boolean;
+}
+
 export const api = {
   listProjects: (signal?: AbortSignal) => request<ProjectSummary[]>('/projects', { signal }),
   project: (id: string, signal?: AbortSignal) => request<ProjectDetail>(`/projects/${encodeURIComponent(id)}`, { signal }),
@@ -197,6 +214,16 @@ export const api = {
   librarySearch: (p: LibrarySearchParams, signal?: AbortSignal) =>
     request<LibrarySearchResult>(`/library/search?${new URLSearchParams({ q: p.q ?? '', language: p.language ?? 'any', free: String(p.free ?? true), page: String(p.page ?? 1) })}`, { signal }),
   libraryBook: (id: string, signal?: AbortSignal) => request<LibraryBookDetail>(`/library/archive/${encodeURIComponent(id)}`, { signal }),
+  shorts: (signal?: AbortSignal) => request<ShortSummary[]>('/shorts', { signal }),
+  short: (id: string, signal?: AbortSignal) => request<ShortDetail>(`/shorts/${encodeURIComponent(id)}`, { signal }),
+  shortDefaults: (signal?: AbortSignal) => request<ShortSettings>('/shorts/defaults', { signal }),
+  createShort: (body: ShortInput) => request<ShortDetail>('/shorts', json('POST', body)),
+  updateShort: (id: string, body: ShortInput) => request<ShortDetail>(`/shorts/${encodeURIComponent(id)}`, json('PATCH', body)),
+  renderShort: (id: string) => request<{ jobId: string }>(`/shorts/${encodeURIComponent(id)}/render`, { method: 'POST' }),
+  cancelShort: (id: string) => request<{ ok: boolean }>(`/shorts/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  deleteShort: (id: string) => request<{ ok: boolean }>(`/shorts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Local AI writes a script (20–60 s). Aborting the signal stops the model. Nothing is saved. */
+  generateShortScript: (body: ShortScriptRequest, signal?: AbortSignal) => request<ShortScriptResult>('/shorts/script', { ...json('POST', body), signal }),
   health: (fresh = false, signal?: AbortSignal) => request<HealthReport>(`/system/health${fresh ? '?fresh=1' : ''}`, { signal }),
   voices: (engine: string, signal?: AbortSignal) => request<VoicesResponse>(`/system/voices?engine=${encodeURIComponent(engine)}`, { signal }),
   config: (signal?: AbortSignal) => request<SystemConfig>('/system/config', { signal }),
@@ -215,6 +242,16 @@ export const outputUrl = (id: string, name: string, opts: { inline?: boolean; v?
   if (opts.v !== undefined) q.set('v', String(opts.v));
   const qs = q.toString();
   return `${API_URL}/projects/${encodeURIComponent(id)}/output/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`;
+};
+
+/** A short's video or subtitles; `v` busts the browser cache after a re-render. */
+export const shortOutputUrl = (id: string, name: string, opts: { inline?: boolean; v?: string; as?: string } = {}) => {
+  const q = new URLSearchParams();
+  if (opts.inline) q.set('inline', '1');
+  if (opts.as) q.set('as', opts.as);
+  if (opts.v) q.set('v', opts.v);
+  const qs = q.toString();
+  return `${API_URL}/shorts/${encodeURIComponent(id)}/output/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`;
 };
 
 export const pageImageUrl = (id: string, page: number) => `${API_URL}/projects/${encodeURIComponent(id)}/pages/${page}/image`;

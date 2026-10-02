@@ -1,4 +1,4 @@
-import type { LanguageCode, TTSEngineName } from '@app/types';
+import type { LanguageCode, TTSEngineName, TTSSettings } from '@app/types';
 import type { PythonPool } from '../python/bridge';
 import { PythonTTSProvider } from './python-provider';
 import type { TTSProvider } from './types';
@@ -61,4 +61,22 @@ export function voiceLanguage(voice: string): string | undefined {
 /** Recommended voice for `engine` in a project in `language`. */
 export function defaultVoice(engine: string, language: string): string | undefined {
   return LANGUAGE_DEFAULTS[language as LanguageCode]?.voices[engine as TTSEngineName] ?? (language === 'en' ? DEFAULT_VOICES[engine] : undefined);
+}
+
+/** Can `engine` narrate `language` at all (Kokoro has no Bangla voice)? */
+export const canNarrate = (engine: string, language: LanguageCode) => LANGUAGE_DEFAULTS[language].engines.includes(engine as TTSEngineName);
+
+/**
+ * Voice settings after a change. Switching the language without choosing an engine moves to that
+ * language's recommended engine and voice when the current engine cannot read it; switching it
+ * without choosing a voice swaps a voice of the other language for the recommended one (an
+ * English voice cannot read Bangla, and the reverse).
+ */
+export function voiceAfterChange(change: { language?: string; tts?: { engine?: string; voice?: string } }, merged: { language: LanguageCode; tts: TTSSettings }): TTSSettings {
+  const lang = LANGUAGE_DEFAULTS[merged.language];
+  const tts = merged.tts;
+  if (change.language && !change.tts?.engine && !lang.engines.includes(tts.engine)) return { ...tts, engine: lang.engine, voice: defaultVoice(lang.engine, merged.language) ?? tts.voice };
+  if (change.language && !change.tts?.voice && voiceLanguage(tts.voice) && voiceLanguage(tts.voice) !== merged.language)
+    return { ...tts, voice: defaultVoice(tts.engine, merged.language) ?? tts.voice };
+  return tts;
 }

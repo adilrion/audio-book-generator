@@ -45,6 +45,7 @@ def _methods() -> dict[str, Callable[[dict, Context], Any]]:
     from .pdf import inspect as pdf_inspect
     from .pdf import render as pdf_render
     from .tts import service as tts_service
+    from .shorts import render as shorts_render
     from .video import render_chapter as video_render
     from . import system
 
@@ -60,6 +61,7 @@ def _methods() -> dict[str, Callable[[dict, Context], Any]]:
         "tts.synthesize": tts_service.synthesize_rpc,
         "tts.synthesize_chapter": tts_service.synthesize_chapter_rpc,
         "video.render_chapter": video_render.render_chapter_rpc,
+        "shorts.render": shorts_render.render_short_rpc,
     }
 
 

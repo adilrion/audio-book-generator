@@ -49,6 +49,13 @@ export class CachePaths {
   thumbnail(projectId: string) {
     return path.join(this.cfg.storage.output, projectId, 'thumbnail.jpg');
   }
+  /** A YouTube Short's folder: short.mp4, short.srt, cover.jpg and .work/ (narration, video). */
+  short(shortId: string) {
+    return path.join(this.cfg.storage.shorts, shortId);
+  }
+  shortWork(shortId: string) {
+    return path.join(this.cfg.storage.shorts, shortId, '.work');
+  }
 }
 
 export interface ProjectManifest {

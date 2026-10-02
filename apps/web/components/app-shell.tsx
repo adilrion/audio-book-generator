@@ -1,7 +1,7 @@
 'use client';
 
 import type { ProjectSummary } from '@app/types';
-import { Activity, BookAudio, Globe, LibraryBig, type LucideIcon, Menu, Plus, Scale } from 'lucide-react';
+import { Activity, BookAudio, Clapperboard, Globe, LibraryBig, type LucideIcon, Menu, Plus, Scale } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
@@ -109,6 +109,9 @@ function SidebarContent() {
         </NavItem>
         <NavItem href="/discover" icon={Globe} active={pathname.startsWith('/discover')}>
           Online library
+        </NavItem>
+        <NavItem href="/shorts" icon={Clapperboard} active={pathname.startsWith('/shorts')}>
+          Shorts
         </NavItem>
         <NavItem
           href="/system"

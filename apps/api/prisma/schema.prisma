@@ -84,8 +84,38 @@ model Project {
   audioChunks      AudioChunk[]
   timelineSegments TimelineSegment[]
   renderJobs       RenderJob[]
+  shorts           Short[]
 
   @@index([createdAt])
+}
+
+/// A YouTube Short: a narrated script rendered as a vertical video with word-by-word captions.
+/// Files (short.mp4, short.srt, cover.jpg, cached narration) live in storage/shorts/<id>.
+model Short {
+  id              String    @id @default(uuid())
+  title           String
+  script          String
+  /// YouTube description and hashtags (written by the local AI with the script, or by hand)
+  description     String    @default("")
+  hashtags        String[]  @default([])
+  /// ShortSettings: language, voice, look
+  settings        Json
+  /// The book the script was written from (its cover can be the background)
+  projectId       String?
+  project         Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  status          JobStatus @default(PENDING)
+  progress        Float     @default(0)
+  /// { stage, message, error } of the current or last render
+  snapshot        Json?
+  cancelRequested Boolean   @default(false)
+  durationSec     Float?
+  /// Fingerprint of the script + settings the current video was made from
+  renderedKey     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([createdAt])
+  @@index([projectId])
 }
 
 model Chapter {

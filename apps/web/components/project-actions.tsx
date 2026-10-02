@@ -1,7 +1,8 @@
 'use client';
 
 import type { ProjectDetail } from '@app/types';
-import { CircleX, Download, Ellipsis, Eraser, ListChecks, LoaderCircle, Play, RotateCcw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import { CircleX, Clapperboard, Download, Ellipsis, Eraser, ListChecks, LoaderCircle, Play, RotateCcw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useCallback, useId, useState } from 'react';
 import { ApiErrorAlert, ErrorHint } from '@/components/api-error-alert';
@@ -223,6 +224,11 @@ export function ProjectActions({ project, cmds, onNotice, onReviewChapters, clas
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => openDialog('clean')} disabled={running || !!busy}>
             <Eraser aria-hidden /> Clean project cache…
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href={`/shorts/new?project=${encodeURIComponent(project.id)}`}>
+              <Clapperboard aria-hidden /> Make a YouTube Short
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onSelect={() => openDialog('delete')} disabled={running || !!busy}>

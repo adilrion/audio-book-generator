@@ -94,7 +94,7 @@ export const THEMES: { value: VideoTheme; label: string; bg: string; page: strin
   { value: 'dark', label: 'Dark', bg: 'rgb(17 19 24)', page: '#ffffff', ink: 'rgb(17 24 39)' },
 ];
 
-const COLORS: { value: string; label: string }[] = [
+export const COLORS: { value: string; label: string }[] = [
   { value: '#FFD54F', label: 'Amber' },
   { value: '#FFF176', label: 'Lemon' },
   { value: '#A5D6A7', label: 'Mint' },
@@ -163,7 +163,7 @@ export function FormSection({
   );
 }
 
-function Field({ label, htmlFor, hint, children, className }: { label: ReactNode; htmlFor?: string; hint?: ReactNode; children: ReactNode; className?: string }) {
+export function Field({ label, htmlFor, hint, children, className }: { label: ReactNode; htmlFor?: string; hint?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <div className={cn('grid gap-2.5', className)}>
       <Label htmlFor={htmlFor} className="text-[13px]">
@@ -176,11 +176,11 @@ function Field({ label, htmlFor, hint, children, className }: { label: ReactNode
 }
 
 /** Grouped on/off settings, macOS-settings style. */
-function ToggleList({ children }: { children: ReactNode }) {
+export function ToggleList({ children }: { children: ReactNode }) {
   return <div className="divide-y overflow-hidden rounded-xl border">{children}</div>;
 }
 
-function ToggleRow({
+export function ToggleRow({
   label,
   description,
   checked,
@@ -222,7 +222,7 @@ function AspectShape({ ratio }: { ratio: AspectRatio }) {
   );
 }
 
-function CheckedMark() {
+export function CheckedMark() {
   return (
     <span
       className="absolute top-2.5 right-2.5 hidden size-4 place-items-center rounded-full bg-foreground text-background group-data-[state=checked]:grid"
@@ -240,7 +240,7 @@ function lightness(hex: string): number {
 }
 
 /** Preset colour swatches plus a custom colour picker. */
-function ColorSwatches({ id, label, colors, value, onChange }: { id: string; label: string; colors: { value: string; label: string }[]; value: string; onChange: (hex: string) => void }) {
+export function ColorSwatches({ id, label, colors, value, onChange }: { id: string; label: string; colors: { value: string; label: string }[]; value: string; onChange: (hex: string) => void }) {
   const custom = !colors.some((c) => c.value === value.toUpperCase());
   return (
     <div className="flex flex-wrap items-center gap-2.5" role="radiogroup" aria-label={label}>
@@ -374,7 +374,10 @@ export function LookPreview({ settings, className }: { settings: ProjectSettings
 
 // ─────────────────────────────── voice picker ───────────────────────────────
 
-function VoiceFields({ settings, config, disabled, update }: { settings: ProjectSettings; config?: SystemConfig; disabled?: boolean; update: (fn: (d: ProjectSettings) => void) => void }) {
+/** What the voice picker reads and changes: a project's or a short's language and voice. */
+export type VoiceSettings = Pick<ProjectSettings, 'language' | 'tts'>;
+
+export function VoiceFields<S extends VoiceSettings>({ settings, config, disabled, update }: { settings: S; config?: SystemConfig; disabled?: boolean; update: (fn: (d: S) => void) => void }) {
   const engine = settings.tts.engine;
   const voices = useApi(`voices:${engine}`, (signal) => api.voices(engine, signal));
   const engines: TTSEngineName[] = config?.engines?.length ? config.engines : ['kokoro', 'piper', 'say'];

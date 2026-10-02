@@ -29,3 +29,6 @@ export * from './maintenance';
 export * from './publish/template';
 export * from './publish/generate';
 export * from './publish/media';
+export * from './shorts/captions';
+export * from './shorts/script';
+export * from './shorts/render';

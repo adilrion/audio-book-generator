@@ -43,6 +43,7 @@ book.pdf  ──►  audiobook.mp4   1920×1080 H.264 + AAC, highlighted pages, 
 - [Publishing to YouTube and social media](#publishing-to-youtube-and-social-media)
 - [Bangla audiobooks (বাংলা)](#bangla-audiobooks-বাংলা)
 - [Books from the internet](#books-from-the-internet)
+- [YouTube Shorts](#youtube-shorts)
 - [Power modes (heat, fan noise and battery)](#power-modes-heat-fan-noise-and-battery)
 - [Performance tuning for a 16 GB Mac](#performance-tuning-for-a-16-gb-mac)
 - [Extending](#extending)
@@ -73,6 +74,10 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   yourself. Books labelled public domain or CC BY / BY-SA are shown by default, each with its
   rights label. Any PDF link works too (Google Drive and Dropbox share links are converted). See
   [Books from the internet](#books-from-the-internet).
+- **YouTube Shorts.** Turn a script into a vertical 1080×1920 Short: a local voice reads it and
+  big captions light up word by word (karaoke, highlight box, one word at a time), over a gradient
+  or the book's own cover. Paste the script, or let the local AI write one from a topic or from one
+  of your books. See [YouTube Shorts](#youtube-shorts).
 - **English and Bangla.** Bangla (বাংলা) books are narrated by Piper's Bangladeshi voice
   `bn_BD-google-medium` (16 speakers). Bangla PDFs with a broken text layer (legacy Bijoy fonts,
   Microsoft Word exports, conjuncts that do not map to Unicode) are read with Tesseract's Bangla OCR
@@ -537,7 +542,7 @@ Run `pnpm dev` (or `pnpm dev:web` while the API and the worker are running) and 
 <http://localhost:3000>.
 
 The app has a sidebar (a drawer on small screens) with **New audiobook**, the **Library**, the
-**System** page, the most recent books with their live status, and the current power mode with a
+**Online library**, **Shorts**, the **System** page, the most recent books with their live status, and the current power mode with a
 pause / resume button while something is processing. Press <kbd>N</kbd> anywhere to start a new
 audiobook and <kbd>/</kbd> in the library to search.
 
@@ -546,6 +551,13 @@ audiobook and <kbd>/</kbd> in the library to search.
   *In progress*, *Needs attention* (failed, or waiting for a chapter review) and *Completed*, or
   search by title and file name. A banner appears when a required dependency is missing (from
   `GET /system/health`).
+- **Online library** (`/discover`): search the Internet Archive for free books on a page of its
+  own. The search stays in the address (`?q=tagore&lang=bn&free=0`), so Back returns to the same
+  results; **Use this book** opens New audiobook with the book already downloading.
+- **Shorts** (`/shorts`, `/shorts/new`, `/shorts/<id>`): every Short with its status; the editor
+  (script, voice, look, YouTube text) with a live 9:16 preview; the finished video with Download MP4,
+  the SRT and copy buttons for the YouTube title and description. **Make a YouTube Short** in a
+  book's ⋯ menu starts one from that book.
 - **New audiobook** (`/new`): drag and drop a PDF, pick a book in the **Online library** tab, or
   paste a PDF link in **Paste a link** (see [Books from the internet](#books-from-the-internet)).
   The page shows its cover, title, author, page count, estimated word count and narration length,
@@ -734,6 +746,15 @@ enqueues a job.
 | `DELETE /projects/:id` | `?deleteOutputs=true` (default `false`) | `{ ok: true, outputsKept }`. Outputs are kept unless requested. The upload is removed only if no other project uses the same PDF. `409` while processing. |
 | `GET /library/search` | `?q=` (title or author; empty = a shelf of classics), `language=any\|en\|bn`, `free=true\|false` (default `true`: only books labelled public domain, CC0, CC BY or CC BY-SA), `page=1…100` | `LibrarySearchResult` `{total, page, pageSize: 24, books: [{source: "archive", id, title, author, year, language, pages, downloads, coverUrl, pageUrl, rights: "public_domain"\|"open"\|"restricted"\|"unknown", license}]}`, most downloaded first. `502` when archive.org does not answer (cached for 10 min when it does). |
 | `GET /library/archive/:id` | | `LibraryBookDetail`: the book plus `files: [{name, size, format}]`, its downloadable PDFs with a text layer first (borrow-only books have none) |
+| `GET /shorts` | | `ShortSummary[]` (newest first) |
+| `GET /shorts/defaults` | | `ShortSettings` for a new short (voice from `.env`) |
+| `POST /shorts` | `{ title, script, description?, hashtags?, settings?, projectId?, render? }` (`settings`: partial `{ language, tts, look }`) | `ShortDetail`. `render: true` queues it at once. `400` for invalid settings (e.g. Kokoro with Bangla), `404` for an unknown book. |
+| `PATCH /shorts/:id` | same fields, all optional | `ShortDetail`. `409` while rendering. |
+| `POST /shorts/:id/render` | | `{ jobId }` on the `shorts` queue. `400` for an empty script or one far over 3 minutes, `409` while queued or rendering. |
+| `POST /shorts/:id/cancel` | | `{ ok }`. A queued short is cancelled at once, a running one within ~1.5 s. |
+| `DELETE /shorts/:id` | | `{ ok }`; removes `storage/shorts/<id>`. `409` while rendering. |
+| `POST /shorts/script` | `{ source: { kind: "topic", topic } \| { kind: "book", projectId }, language, seconds: 15–180, style: "hook" \| "summary" \| "story" }` | `{ title, script, description, hashtags, model }` written by the local AI — **not saved** (10–60 s; closing the request stops the model). `409` when `LLM_ENABLED=false`, `503` when Ollama is down. |
+| `GET /shorts/:id/output/:name` | `short.mp4` or `short.srt`; `?inline=1`, `?as=<file name>` | File with HTTP Range support |
 | `GET /system/health` | `?fresh=1` bypasses the 15 s cache | `HealthReport` `{ok, checks[{name, ok, required, message, fix?}]}`: the doctor's checks plus DB and Redis |
 | `GET /system/voices` | `?engine=kokoro\|piper\|say` (default `TTS_ENGINE`) | `{engine, available, message, voices: VoiceInfo[]}`; `400` for an unknown engine |
 | `GET /system/performance` | | `PerformanceStatus` `{prefs: {mode, quietOnBattery, paused}, plan (what runs now, e.g. quiet because on battery), modes (labels, measured speeds)}` |
@@ -861,6 +882,10 @@ storage/                                      (STORAGE_DIR)
 │   ├── manifest.json                         which cache keys this project's outputs were built from
 │   ├── state.json                            CLI projects only (steps + progress)
 │   └── .work/                                concat lists / metadata during a run
+├── shorts/<shortId>/                         YouTube Shorts
+│   ├── short.mp4  short.srt                  the video (1080×1920) and its captions
+│   ├── cover.jpg                             the book's first page, when the cover background is used
+│   └── .work/narration-<key>.flac/.json      cached narration (reused when only the look changes)
 └── models/
     ├── kokoro/kokoro-v1.0.onnx, voices-v1.0.bin
     └── piper/<voice>.onnx, <voice>.onnx.json
@@ -1129,6 +1154,42 @@ from the page, and is removed again if it fails.
 For safety the API never downloads from this Mac or the local network (`localhost`, `10.x`,
 `192.168.x`, link-local and other private addresses, in any spelling). This is checked on the
 address it actually connects to and again after every redirect.
+
+---
+
+## YouTube Shorts
+
+**Shorts** in the sidebar makes vertical videos for YouTube Shorts: a script read by a local voice,
+with big captions that light up word by word. A 60-second short renders in well under a minute.
+
+1. **Script.** Paste or write it — one idea per sentence; a new line adds a longer pause. About
+   150 words make a minute (the editor shows the estimate). Or **Generate with AI**: the local model
+   (Ollama) writes the title, script, YouTube description and hashtags from **a topic** or from
+   **one of your books** (it reads the opening of the first chapter, so it does not invent the plot),
+   in the style *Hook & teaser*, *Key ideas* or *Mini story*, for 30, 45, 60 or 90 seconds, in
+   English or Bangla. Check the facts and edit freely.
+2. **Voice.** Any installed engine and voice (Bangla uses Piper's Bangla voice), and the speed.
+3. **Look.** Background: Midnight, Sunset, Ocean, Forest, Paper, or **Book cover** (the book's first
+   page blurred behind it and shown sharp above the captions, with a slow push-in). Captions:
+   *Karaoke* (a few words, the spoken one in colour), *Highlight box*, *One word* at a time, or
+   *Plain*; highlight colour, middle or lower position, capitals, title at the top, progress bar.
+   The captions stay inside YouTube's safe area (clear of the title, channel name and buttons).
+4. **Create short** → the worker narrates, draws the frames and muxes the video. Then **Download MP4**
+   and upload it in YouTube Studio (or the YouTube app → + → Short) with the title and description
+   from the copy buttons; any vertical video up to 3 minutes becomes a Short.
+
+How it is made: the script is narrated sentence by sentence like a chapter (exact sentence times
+from sample counts); the captions show the words **as written** ("1891", "e.g."), timed against what
+the voice actually says ("eighteen ninety-one", "for example"). Cards hold up to four words, never
+span two sentences and break at commas. The Python worker draws each caption card once per spoken
+word and composites it on a pre-drawn background (a few milliseconds per frame), encoding with
+VideoToolbox; the audio is loudness-normalized AAC, and the result is checked for audio/video sync.
+The narration is cached, so changing only the look re-renders the video without narrating again.
+
+Shorts have their own job queue (`shorts`), so a short never waits behind a book that is rendering;
+they follow the power mode (pause, Silent, Cool & quiet) like a book does. Shorts longer than
+3 minutes are refused. A short made from a book keeps its own copy of the cover, so it still renders
+the same way after the book is deleted.
 
 ---
 
@@ -1403,15 +1464,16 @@ Also deliberately limited in V1:
 ```text
 apps/
   api/                 NestJS API (src/main.ts) + BullMQ worker (src/worker.ts), Prisma schema & migrations;
-                       src/library/ = online library (archive.org) + safe PDF link downloads
+                       src/library/ = online library (archive.org) + safe PDF link downloads;
+                       src/shorts/ = YouTube Shorts (worker side: src/worker/shorts-processor.ts)
   cli/                 `audiobook` CLI (create | inspect | voices | doctor | sample)
   web/                 Next.js dashboard
 packages/
   types/               domain model shared by all apps (settings, status, pdf, analysis, audio, timeline, api, library)
   config/              .env loading + validation (zod), storage paths
   shared/              AppError, hashing, atomic fs, semaphore, logger, formatting
-  pipeline/            PipelineRunner, text/, llm/, tts/, audio/, timeline/, python/ bridge, health, maintenance
-workers/processing/    Python worker: audiobook_worker/{pdf,tts,video}, tests/, requirements.txt
+  pipeline/            PipelineRunner, text/, llm/, tts/, audio/, timeline/, shorts/, python/ bridge, health, maintenance
+workers/processing/    Python worker: audiobook_worker/{pdf,tts,video,shorts}, tests/, requirements.txt
 scripts/               setup-mac.sh, setup-python.sh, download-models.sh, lib.sh
 docker/, docker-compose.yml   Postgres + Redis only
 docs/ARCHITECTURE.md   design notes

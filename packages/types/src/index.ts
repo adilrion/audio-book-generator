@@ -8,3 +8,4 @@ export * from './api';
 export * from './performance';
 export * from './publish';
 export * from './library';
+export * from './shorts';

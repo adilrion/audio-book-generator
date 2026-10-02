@@ -124,7 +124,7 @@ export function defaultVoiceFor(config: Pick<SystemConfig, 'defaultVoices' | 'la
  * Switch a settings draft to another narration language. Each language has its own voices: Bangla
  * is read by Piper's Bangla voice, not Kokoro, so the engine moves too when it cannot read it.
  */
-export function applyLanguage(d: ProjectSettings, language: LanguageCode, config: Pick<SystemConfig, 'defaultVoices' | 'languageDefaults'> | undefined): void {
+export function applyLanguage(d: Pick<ProjectSettings, 'language' | 'tts'>, language: LanguageCode, config: Pick<SystemConfig, 'defaultVoices' | 'languageDefaults'> | undefined): void {
   d.language = language;
   const lang = config?.languageDefaults?.[language];
   if (lang && !lang.engines.includes(d.tts.engine)) d.tts.engine = lang.engine;

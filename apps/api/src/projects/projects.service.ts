@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, type Document, type JobStatus, type Project } from '@prisma/client';
-import { CachePaths, LANGUAGE_DEFAULTS, chaptersSignature, cleanProjectCache, defaultVoice, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, isOpeningPagesTitle, voiceLanguage, type OutputRecord, type ProjectManifest } from '@app/pipeline';
+import { CachePaths, canNarrate, chaptersSignature, cleanProjectCache, deleteProjectFiles, isBackMatterTitle, isFrontMatterTitle, isOpeningPagesTitle, voiceAfterChange, type OutputRecord, type ProjectManifest } from '@app/pipeline';
 import { AppError, exists, readJsonIfExists, sha256File, toAppError } from '@app/shared';
 import {
   ASPECT_SIZES,
@@ -21,7 +21,7 @@ import {
   type TextRepair,
 } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
-import { badRequest, conflict, notFound } from '../common/errors';
+import { badRequest, cannotNarrate, conflict, notFound } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
 import { PythonService } from '../system/python.service';
@@ -134,17 +134,8 @@ export class ProjectsService {
     }
     if (p.video?.aspectRatio && !p.video.width) Object.assign(p.video, ASPECT_SIZES[p.video.aspectRatio]);
     const merged = resolveSettings(p, base);
-    // Switching the language without choosing a voice: move to that language's recommended voice
-    // (an English voice cannot read Bangla, and the reverse).
-    const lang = LANGUAGE_DEFAULTS[merged.language];
-    if (p.language && !p.tts?.engine && !lang.engines.includes(merged.tts.engine)) merged.tts = { ...merged.tts, engine: lang.engine, voice: defaultVoice(lang.engine, merged.language) ?? merged.tts.voice };
-    else if (p.language && !p.tts?.voice && voiceLanguage(merged.tts.voice) && voiceLanguage(merged.tts.voice) !== merged.language)
-      merged.tts = { ...merged.tts, voice: defaultVoice(merged.tts.engine, merged.language) ?? merged.tts.voice };
-    if (!lang.engines.includes(merged.tts.engine))
-      throw badRequest(
-        `The ${merged.tts.engine} voice engine cannot narrate ${merged.language === 'bn' ? 'Bangla' : 'this language'}.`,
-        merged.language === 'bn' ? 'Choose the Piper engine with a Bangla voice. Install it with: bash scripts/download-models.sh bangla' : `Choose one of: ${lang.engines.join(', ')}.`,
-      );
+    merged.tts = voiceAfterChange(p, merged);
+    if (!canNarrate(merged.tts.engine, merged.language)) throw cannotNarrate(merged.tts.engine, merged.language);
     return merged;
   }
 

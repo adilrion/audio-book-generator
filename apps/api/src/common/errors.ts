@@ -1,4 +1,6 @@
+import { LANGUAGE_DEFAULTS } from '@app/pipeline';
 import { AppError, toAppError } from '@app/shared';
+import type { LanguageCode } from '@app/types';
 
 export const redisUnavailable = (cause?: unknown) =>
   new AppError('REDIS_UNAVAILABLE', 'The background job service (Redis) is not running.', { hint: 'Start it with: docker compose up -d redis', cause });
@@ -17,3 +19,9 @@ export function toUserError(err: unknown): AppError {
 export const notFound = (what: string) => new AppError('NOT_FOUND', `${what} not found.`, { retryable: false });
 export const badRequest = (msg: string, hint?: string) => new AppError('BAD_REQUEST', msg, { retryable: false, hint });
 export const conflict = (msg: string) => new AppError('CONFLICT', msg, { retryable: false });
+
+export const cannotNarrate = (engine: string, language: LanguageCode) =>
+  badRequest(
+    `The ${engine} voice engine cannot narrate ${language === 'bn' ? 'Bangla' : 'this language'}.`,
+    language === 'bn' ? 'Choose the Piper engine with a Bangla voice. Install it with: bash scripts/download-models.sh bangla' : `Choose one of: ${LANGUAGE_DEFAULTS[language].engines.join(', ')}.`,
+  );

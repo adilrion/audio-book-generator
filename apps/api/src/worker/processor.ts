@@ -7,9 +7,10 @@ import { resolveSettings, type DeepPartial, type ProjectSettings } from '@app/ty
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { toUserError } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
-import { QUEUE_NAME, redisConnection, type ProcessJobData } from '../queue/queue.service';
+import { QUEUE_NAME, SHORTS_QUEUE, redisConnection, type ProcessJobData, type ShortJobData } from '../queue/queue.service';
 import { readPerformancePrefs } from '../system/performance.service';
 import { PrismaStore } from './prisma-store';
+import { ShortsProcessor } from './shorts-processor';
 import { WorkerLock, type LockClient } from './worker-lock';
 
 const RUNNING = ['EXTRACTING', 'CLEANING', 'ANALYZING', 'GENERATING_AUDIO', 'PREPARING_VIDEO', 'RENDERING'] as const;
@@ -31,6 +32,9 @@ const interruptedError = () => ({
 @Injectable()
 export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationShutdown {
   private worker?: Worker<ProcessJobData>;
+  /** YouTube Shorts: their own queue, so a short never waits behind a book. */
+  private shortsWorker?: Worker<ShortJobData>;
+  private shorts?: ShortsProcessor;
   private lock?: WorkerLock;
   private readonly log = new Logger('Worker');
   private readonly controllers = new Map<string, AbortController>();
@@ -52,6 +56,18 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
       autorun: false, // only once we hold the worker lock
     });
     this.worker.on('error', (e) => this.log.error(`queue error: ${toUserError(e).message} — ${describeError(e)}`));
+    this.shorts = new ShortsProcessor(this.cfg, this.prisma);
+    const shorts = this.shorts;
+    this.shortsWorker = new Worker<ShortJobData>(
+      SHORTS_QUEUE,
+      (job) => {
+        const run = shorts.run(job.data.shortId, () => this.stopping).finally(() => this.inflight.delete(run));
+        this.inflight.add(run);
+        return run;
+      },
+      { connection: redisConnection(this.cfg.REDIS_URL, true), concurrency: 1, lockDuration: 120_000, maxStalledCount: 0, autorun: false },
+    );
+    this.shortsWorker.on('error', (e) => this.log.error(`shorts queue error: ${toUserError(e).message} — ${describeError(e)}`));
     const worker = this.worker;
     this.lock = new WorkerLock(() => worker.client as unknown as Promise<LockClient>, WORKER_LOCK_KEY);
     if (await this.lock.tryAcquire()) {
@@ -85,6 +101,7 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
     this.lock!.startRenewal((holder) => this.log.error(`Lost the worker lock to ${holder ?? 'nobody'} — is another worker running?`));
     await this.recoverInterrupted();
     this.worker!.run().catch((e) => this.log.error(`queue error: ${toUserError(e).message} — ${describeError(e)}`));
+    this.shortsWorker!.run().catch((e) => this.log.error(`shorts queue error: ${toUserError(e).message} — ${describeError(e)}`));
     this.log.log(`Worker ready (concurrency ${this.cfg.MAX_CONCURRENT_PROJECTS}, TTS ${this.cfg.MAX_CONCURRENT_TTS}, render ${this.cfg.MAX_CONCURRENT_PDF_RENDER})`);
   }
 
@@ -110,6 +127,8 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
     }
     await this.prisma.renderJob.updateMany({ where: { status: { in: [...RUNNING] } }, data: { status: 'FAILED', finishedAt: new Date() } });
     if (stuck.length) this.log.warn(`Marked ${stuck.length} interrupted project(s) as resumable`);
+    const shorts = await this.shorts!.recoverInterrupted();
+    if (shorts) this.log.warn(`Marked ${shorts} interrupted short(s) as failed`);
   }
 
   private process(job: Job<ProcessJobData>): Promise<void> {
@@ -211,12 +230,16 @@ export class ProcessingWorker implements OnApplicationBootstrap, OnApplicationSh
     this.stopping = true;
     this.wake?.();
     for (const c of this.controllers.values()) c.abort();
+    this.shorts?.abortAll();
     // Let aborted runs record their state before a standby worker may take over; the lock uses the
     // worker's Redis connection, so free it before close() quits that connection.
     await Promise.allSettled([...this.inflight]);
     const released = this.lock?.release().catch(() => undefined);
     await Promise.race([released, new Promise((r) => setTimeout(r, 3000).unref())]);
     // close() waits for Redis; with a dead connection it can wait forever — never block shutdown on it.
-    await Promise.race([this.worker?.close().catch(() => undefined), new Promise((r) => setTimeout(r, 5000).unref())]);
+    await Promise.race([
+      Promise.all([this.worker?.close().catch(() => undefined), this.shortsWorker?.close().catch(() => undefined)]),
+      new Promise((r) => setTimeout(r, 5000).unref()),
+    ]);
   }
 }

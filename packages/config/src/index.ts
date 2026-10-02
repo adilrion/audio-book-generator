@@ -77,6 +77,8 @@ export interface AppConfig extends RawEnv {
     renders: string;
     output: string;
     models: string;
+    /** YouTube Shorts: one folder per short (video, subtitles, cover, cached narration). */
+    shorts: string;
   };
   workerDir: string;
   cpuCount: number;
@@ -115,6 +117,7 @@ export function loadConfig(overrides: Partial<RawEnv> = {}, opts: { reload?: boo
       renders: path.join(root, 'renders'),
       output: path.join(root, 'output'),
       models: path.join(root, 'models'),
+      shorts: path.join(root, 'shorts'),
     },
     workerDir: path.join(repoRoot, 'workers', 'processing'),
     cpuCount: os.availableParallelism?.() ?? os.cpus().length,
