@@ -1,6 +1,6 @@
 import type { LibraryBook } from '@app/types';
 import { describe, expect, it } from 'vitest';
-import { bookMeta, displayAuthor, fileMeta, linkLabel, linkProblem, rightsBadge } from '@/lib/library';
+import { bookMeta, displayAuthor, fileMeta, libraryNewUrl, librarySearchQuery, linkLabel, linkProblem, parseLibrarySearch, parseNewParams, rightsBadge } from '@/lib/library';
 
 const book = (extra: Partial<LibraryBook> = {}): LibraryBook => ({
   source: 'archive',
@@ -53,5 +53,22 @@ describe('library display', () => {
     expect(linkLabel('https://example.com/books/Pride%20and%20Prejudice.pdf?x=1')).toBe('Pride and Prejudice.pdf');
     expect(linkLabel('https://www.dropbox.com/s/abc/view?dl=0')).toBe('dropbox.com');
     expect(linkLabel('https://drive.google.com/file/d/1AbC/view')).toBe('drive.google.com');
+  });
+
+  it('keeps the library search in the address bar', () => {
+    expect(librarySearchQuery({ q: '', language: 'any', free: true })).toBe('');
+    expect(librarySearchQuery({ q: 'রবীন্দ্রনাথ', language: 'bn', free: false })).toBe('?q=%E0%A6%B0%E0%A6%AC%E0%A7%80%E0%A6%A8%E0%A7%8D%E0%A6%A6%E0%A7%8D%E0%A6%B0%E0%A6%A8%E0%A6%BE%E0%A6%A5&lang=bn&free=0');
+    expect(parseLibrarySearch({ q: 'tagore', lang: 'bn', free: '0' })).toEqual({ q: 'tagore', language: 'bn', free: false });
+    expect(parseLibrarySearch({ lang: 'fr', q: ['a', 'b'] })).toEqual({ q: 'a', language: undefined, free: undefined });
+  });
+
+  it('opens New audiobook with a library book or a tab', () => {
+    const url = libraryNewUrl('RABINDRARACHANABALI', 'RABINDRA RACHANABALI - 1ST VOL_text.pdf');
+    expect(url).toBe('/new?archive=RABINDRARACHANABALI&file=RABINDRA+RACHANABALI+-+1ST+VOL_text.pdf');
+    const sp = Object.fromEntries(new URLSearchParams(url.split('?')[1]));
+    expect(parseNewParams(sp)).toEqual({ book: { id: 'RABINDRARACHANABALI', file: 'RABINDRA RACHANABALI - 1ST VOL_text.pdf' }, tab: 'library' });
+    expect(parseNewParams({ archive: '../x' })).toEqual({ book: undefined, tab: undefined });
+    expect(parseNewParams({ source: 'link' })).toEqual({ book: undefined, tab: 'link' });
+    expect(parseNewParams({ source: 'nope' })).toEqual({ book: undefined, tab: undefined });
   });
 });

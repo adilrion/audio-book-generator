@@ -1,7 +1,7 @@
 'use client';
 
 import { DEFAULT_SETTINGS, type LibraryBook, type LibraryBookDetail, type LibraryFile, type ProjectDetail, type ProjectSettings } from '@app/types';
-import { CircleCheck, FileUp, Headphones, Languages, LibraryBig, Link2, ListTree, LoaderCircle, Play, ScanText, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { CircleCheck, FileUp, Globe, Headphones, Languages, Link2, ListTree, LoaderCircle, Play, ScanText, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
@@ -19,7 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useApi } from '@/hooks/use-api';
 import { ApiError, api, type ImportSource, importProject, toApiError, type UploadHandle, uploadProject } from '@/lib/api';
 import { estimateNarrationSec, formatBytes, formatDuration, formatNumber } from '@/lib/format';
-import { displayAuthor, linkLabel, rightsBadge } from '@/lib/library';
+import { displayAuthor, linkLabel, type NewSourceTab, rightsBadge } from '@/lib/library';
 import { cloneSettings, diffSettings, isEmptyPatch, settingsForUpload } from '@/lib/settings';
 import { cn } from '@/lib/utils';
 import { applyLanguage, ENGINE_LABELS } from '@/lib/voices';
@@ -39,7 +39,6 @@ type Upload =
   | { state: 'done'; file: Source; project: ProjectDetail }
   | { state: 'error'; file: Source; error: ApiError };
 
-type SourceTab = 'upload' | 'library' | 'link';
 
 const RETRY_LABEL: Record<Source['kind'], string> = { file: 'Choose another file', library: 'Choose another book', link: 'Try another link' };
 
@@ -156,7 +155,7 @@ function SummaryRow({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-export function NewProject() {
+export function NewProject({ initialBook, initialTab }: { initialBook?: { id: string; file?: string }; initialTab?: NewSourceTab } = {}) {
   const router = useRouter();
   const config = useApi('config', (signal) => api.config(signal));
   // New books pause for a chapter review by default: a wrong chapter list is cheap to fix before narration.
@@ -171,7 +170,7 @@ export function NewProject() {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<ApiError>();
   const [localError, setLocalError] = useState<string>();
-  const [tab, setTab] = useState<SourceTab>('upload');
+  const [tab, setTab] = useState<NewSourceTab>(initialTab ?? 'upload');
   const [notice, setNotice] = useState<string>();
 
   // Server defaults (engine/voice come from the API's .env) — unless the user already changed something.
@@ -179,7 +178,15 @@ export function NewProject() {
     if (config.data && !touched.current) setSettings(withReview(cloneSettings(config.data.defaults)));
   }, [config.data]);
 
-  useEffect(() => () => handle.current?.abort(), []);
+  /** Looking up a book chosen on the Online library page, before its download starts. */
+  const lookup = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      handle.current?.abort();
+      lookup.current?.abort();
+    },
+    [],
+  );
 
   const maxMb = config.data?.maxUploadMb;
 
@@ -255,7 +262,9 @@ export function NewProject() {
       setSettings(next);
       setNotice(`Narration language set to ${lang === 'bn' ? 'Bangla' : 'English'} to match this book.`);
     } else setNotice(undefined);
-    const name = book.files.length > 1 ? `${book.title} — ${file.name}` : book.title;
+    // The project gets the main title ("Pride and prejudice : a novel" → "Pride and prejudice"); show the same while it downloads.
+    const title = book.title.split(/\s+:\s+/)[0];
+    const name = book.files.length > 1 ? `${title} — ${file.name}` : title;
     onImport({ source: 'archive', id: book.id, file: file.name }, { kind: 'library', name, size: file.size || undefined, book }, next);
   };
 
@@ -264,8 +273,39 @@ export function NewProject() {
     onImport({ source: 'url', url }, { kind: 'link', name: linkLabel(url) }, latest.current);
   };
 
+  // A book chosen on the Online library page (/new?archive=…): start it once the server defaults are in.
+  const preset = useRef(initialBook);
+  useEffect(() => {
+    const b = preset.current;
+    if (!b || (!config.data && !config.error)) return;
+    preset.current = undefined; // once, also under React's doubled dev effects
+    window.history.replaceState(window.history.state, '', '/new'); // a reload must not download it again
+    const c = new AbortController();
+    lookup.current = c;
+    setUpload({ state: 'uploading', file: { kind: 'library', name: 'Book from the online library' }, phase: 'download', progress: 0 });
+    api
+      .libraryBook(b.id, c.signal)
+      .then((detail) => {
+        if (c.signal.aborted) return;
+        const file = (b.file && detail.files.find((f) => f.name === b.file)) || detail.files[0];
+        if (file) return onBook(detail, file);
+        setUpload({ state: 'idle' });
+        setLocalError(`“${detail.title}” has no PDF that can be downloaded — it may be a borrow-only book.`);
+      })
+      .catch((err) => {
+        if (c.signal.aborted) return;
+        setUpload({ state: 'idle' });
+        setLocalError(toApiError(err).message);
+      })
+      .finally(() => {
+        if (lookup.current === c) lookup.current = null;
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the config has loaded
+  }, [config.data, config.error]);
+
   const reset = () => {
     handle.current?.abort();
+    lookup.current?.abort();
     // The project was created by the upload but never started — remove it (the PDF is kept if other projects use it).
     if (upload.state === 'done') void api.deleteProject(upload.project.id, false).catch(() => undefined);
     setUpload({ state: 'idle' });
@@ -333,13 +373,13 @@ export function NewProject() {
             description="Upload a PDF from this Mac, find a free book online, or paste a link to a PDF. Books are kept on this Mac, and the same file is only stored once."
           >
             {/* Stays mounted while a book is loading, so “Choose another book” returns to the same search. */}
-            <Tabs value={tab} onValueChange={(v) => setTab(v as SourceTab)} className={cn(upload.state !== 'idle' && 'hidden')}>
+            <Tabs value={tab} onValueChange={(v) => setTab(v as NewSourceTab)} className={cn(upload.state !== 'idle' && 'hidden')}>
               <TabsList className="w-full sm:w-fit">
                 <TabsTrigger value="upload">
                   <FileUp aria-hidden /> Upload
                 </TabsTrigger>
                 <TabsTrigger value="library">
-                  <LibraryBig aria-hidden /> Online library
+                  <Globe aria-hidden /> Online library
                 </TabsTrigger>
                 <TabsTrigger value="link">
                   <Link2 aria-hidden /> <span className="sm:hidden">Link</span>
@@ -350,7 +390,7 @@ export function NewProject() {
                 <UploadDropzone onFile={onFile} maxMb={maxMb} />
               </TabsContent>
               <TabsContent value="library">
-                <BookLibrary onPick={onBook} initialLanguage={settings.language === 'bn' ? 'bn' : 'any'} />
+                <BookLibrary onPick={onBook} initial={{ language: settings.language === 'bn' ? 'bn' : 'any' }} />
               </TabsContent>
               <TabsContent value="link">
                 <LinkImport onLink={onLink} />

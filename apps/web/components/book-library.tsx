@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { type ApiError, api, toApiError } from '@/lib/api';
 import { bookMeta, fileMeta, rightsBadge } from '@/lib/library';
 import { formatNumber } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 type Results = { key: string; total: number; books: LibraryBook[]; page: number; pageSize: number };
 
@@ -84,20 +85,32 @@ function CardSkeleton() {
  * Search the Internet Archive for a book and pick one of its PDFs. Free-to-use books (as their
  * pages label them) are shown by default; the empty search lists the most downloaded ones.
  */
+export interface LibrarySearchState {
+  q: string;
+  language: LibraryLanguage;
+  free: boolean;
+}
+
 export function BookLibrary({
   onPick,
   disabled,
-  initialLanguage = 'any',
+  initial,
+  onSearchChange,
+  wide = false,
 }: {
   onPick: (book: LibraryBookDetail, file: LibraryFile) => void;
   disabled?: boolean;
-  initialLanguage?: LibraryLanguage;
+  initial?: Partial<LibrarySearchState>;
+  /** Called when the search changes (e.g. to keep it in the address bar). */
+  onSearchChange?: (s: LibrarySearchState) => void;
+  /** More columns, for the full-page library. */
+  wide?: boolean;
 }) {
   const ids = { q: useId(), free: useId() };
-  const [text, setText] = useState('');
-  const [query, setQuery] = useState('');
-  const [language, setLanguage] = useState<LibraryLanguage>(initialLanguage);
-  const [free, setFree] = useState(true);
+  const [text, setText] = useState(initial?.q ?? '');
+  const [query, setQuery] = useState((initial?.q ?? '').trim());
+  const [language, setLanguage] = useState<LibraryLanguage>(initial?.language ?? 'any');
+  const [free, setFree] = useState(initial?.free ?? true);
   const [results, setResults] = useState<Results>();
   const [loading, setLoading] = useState(true);
   const [more, setMore] = useState(false);
@@ -114,6 +127,10 @@ export function BookLibrary({
     const t = window.setTimeout(() => setQuery(text.trim()), 500);
     return () => window.clearTimeout(t);
   }, [text]);
+
+  const changed = useRef(onSearchChange);
+  changed.current = onSearchChange;
+  useEffect(() => changed.current?.({ q: query, language, free }), [query, language, free]);
 
   useEffect(() => {
     ctrl.current?.abort();
@@ -162,6 +179,7 @@ export function BookLibrary({
     setQuery(text.trim());
   };
 
+  const grid = cn('grid gap-2.5 sm:grid-cols-2', wide && 'lg:grid-cols-3 2xl:grid-cols-4');
   const books = results?.key === key ? results.books : [];
   const total = results?.key === key ? results.total : 0;
   const canShowMore = !loading && results?.key === key && books.length < total && books.length < 100 * results.pageSize;
@@ -237,13 +255,13 @@ export function BookLibrary({
       {error && <ApiErrorAlert error={error} title="The online library is not available" onRetry={() => setAttempt((a) => a + 1)} />}
 
       {loading ? (
-        <ul className="grid gap-2.5 sm:grid-cols-2">
-          {Array.from({ length: 4 }, (_, i) => (
+        <ul className={grid}>
+          {Array.from({ length: wide ? 8 : 4 }, (_, i) => (
             <CardSkeleton key={i} />
           ))}
         </ul>
       ) : books.length > 0 ? (
-        <ul className="grid gap-2.5 sm:grid-cols-2">
+        <ul className={grid}>
           {books.map((b) => (
             <BookCard key={b.id} book={b} busy={picking === b.id} disabled={!!disabled || (!!picking && picking !== b.id)} problem={problems[b.id]} onPick={() => void pick(b)} />
           ))}

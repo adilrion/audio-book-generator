@@ -1,7 +1,7 @@
 'use client';
 
 import type { ProjectSummary } from '@app/types';
-import { ChevronRight, FileText, Headphones, LayoutGrid, List, Plus, Search, Upload, X } from 'lucide-react';
+import { ChevronRight, FileText, Globe, Headphones, LayoutGrid, List, Plus, Search, Upload, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -106,11 +106,18 @@ function EmptyState() {
       <p className="mx-auto mt-3 max-w-lg text-[15px] text-muted-foreground">
         Narrated with local voices and highlighted sentence by sentence — made entirely on this Mac, ready for YouTube.
       </p>
-      <Button asChild size="lg" variant="brand" className="mt-8">
-        <Link href="/new">
-          <Upload aria-hidden /> Upload a PDF
-        </Link>
-      </Button>
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <Button asChild size="lg" variant="brand">
+          <Link href="/new">
+            <Upload aria-hidden /> Upload a PDF
+          </Link>
+        </Button>
+        <Button asChild size="lg" variant="outline">
+          <Link href="/discover">
+            <Globe aria-hidden /> Find a free book
+          </Link>
+        </Button>
+      </div>
       <ol className="mx-auto mt-12 grid max-w-3xl gap-3 text-left sm:grid-cols-3">
         {STEPS.map((s, i) => (
           <li key={s.title} className="grid gap-1 rounded-2xl border bg-background/60 p-4">

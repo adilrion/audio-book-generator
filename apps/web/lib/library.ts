@@ -1,4 +1,4 @@
-import type { BookRights, LibraryBook, LibraryFile } from '@app/types';
+import type { BookRights, LibraryBook, LibraryFile, LibraryLanguage } from '@app/types';
 import { formatBytes } from './format';
 import { languageName } from './voices';
 
@@ -72,4 +72,40 @@ export function linkLabel(raw: string): string {
   } catch {
     return raw.trim();
   }
+}
+
+type Params = Record<string, string | string[] | undefined>;
+const param = (sp: Params, k: string) => (Array.isArray(sp[k]) ? sp[k][0] : sp[k]);
+
+/** /discover?q=…&lang=bn&free=0 → the library search to open with. */
+export function parseLibrarySearch(sp: Params): { q?: string; language?: LibraryLanguage; free?: boolean } {
+  const lang = param(sp, 'lang');
+  return {
+    q: param(sp, 'q')?.slice(0, 200),
+    language: lang === 'en' || lang === 'bn' ? lang : undefined,
+    free: param(sp, 'free') === '0' ? false : undefined,
+  };
+}
+
+/** The search as a query string, defaults left out ("" for the plain shelf). */
+export function librarySearchQuery(s: { q: string; language: LibraryLanguage; free: boolean }): string {
+  const p = new URLSearchParams();
+  if (s.q) p.set('q', s.q);
+  if (s.language !== 'any') p.set('lang', s.language);
+  if (!s.free) p.set('free', '0');
+  const qs = p.toString();
+  return qs ? `?${qs}` : '';
+}
+
+/** New audiobook with a library book already chosen. */
+export const libraryNewUrl = (id: string, file?: string) => `/new?${new URLSearchParams(file ? { archive: id, file } : { archive: id })}`;
+
+export type NewSourceTab = 'upload' | 'library' | 'link';
+
+/** /new?archive=<id>&file=<pdf> starts with that book; ?source=library|link opens that tab. */
+export function parseNewParams(sp: Params): { book?: { id: string; file?: string }; tab?: NewSourceTab } {
+  const id = param(sp, 'archive');
+  const source = param(sp, 'source');
+  const book = id && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) ? { id, file: param(sp, 'file') || undefined } : undefined;
+  return { book, tab: book ? 'library' : source === 'library' || source === 'link' ? source : undefined };
 }

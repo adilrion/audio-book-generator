@@ -1,7 +1,7 @@
 'use client';
 
 import type { ProjectSummary } from '@app/types';
-import { Activity, BookAudio, LibraryBig, type LucideIcon, Menu, Plus, Scale } from 'lucide-react';
+import { Activity, BookAudio, Globe, LibraryBig, type LucideIcon, Menu, Plus, Scale } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
@@ -106,6 +106,9 @@ function SidebarContent() {
           trailing={projects.data?.length ? <span className="text-xs font-normal text-muted-foreground tabular">{projects.data.length}</span> : undefined}
         >
           Library
+        </NavItem>
+        <NavItem href="/discover" icon={Globe} active={pathname.startsWith('/discover')}>
+          Online library
         </NavItem>
         <NavItem
           href="/system"
