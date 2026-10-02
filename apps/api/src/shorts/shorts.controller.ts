@@ -1,9 +1,20 @@
 import fs from 'node:fs';
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { YOUTUBE_LIMITS } from '@app/types';
 import { notFound } from '../common/errors';
 import { downloadName } from '../projects/projects.controller';
+import { readBody } from '../publish/publish.controller';
 import { ShortsService } from './shorts.service';
+
+/** Abort when the client goes away before the answer was sent (stops the local model). */
+function abortOnClose(res: Response): AbortSignal {
+  const ctrl = new AbortController();
+  res.on('close', () => {
+    if (!res.writableFinished) ctrl.abort();
+  });
+  return ctrl.signal;
+}
 
 @Controller('shorts')
 export class ShortsController {
@@ -28,11 +39,13 @@ export class ShortsController {
   /** Local AI writes a script (20–60 s); closing the request stops the model. Nothing is saved. */
   @Post('script')
   script(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
-    const ctrl = new AbortController();
-    res.on('close', () => {
-      if (!res.writableFinished) ctrl.abort();
-    });
-    return this.shorts.generateScript(body, ctrl.signal);
+    return this.shorts.generateScript(body, abortOnClose(res));
+  }
+
+  /** Local AI writes the YouTube description, hashtags and tags for a script. Nothing is saved. */
+  @Post('metadata')
+  metadata(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+    return this.shorts.generateMetadata(body, abortOnClose(res));
   }
 
   @Get(':id')
@@ -58,6 +71,17 @@ export class ShortsController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.shorts.remove(id);
+  }
+
+  /** Body: the thumbnail JPEG itself (Content-Type: image/jpeg), at most 2 MB. */
+  @Put(':id/thumbnail')
+  async thumbnail(@Param('id') id: string, @Req() req: Request) {
+    return this.shorts.saveThumbnail(id, await readBody(req, YOUTUBE_LIMITS.thumbnailBytes));
+  }
+
+  @Delete(':id/thumbnail')
+  deleteThumbnail(@Param('id') id: string) {
+    return this.shorts.deleteThumbnail(id);
   }
 
   /** `inline` streams for the player; `as` downloads under another name. */

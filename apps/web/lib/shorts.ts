@@ -1,4 +1,4 @@
-import { type JobStatus, type LanguageCode, SHORT_IDEAL_SEC, SHORT_MAX_SEC, type ShortCaptionStyle, type ShortScriptStyle, type ShortTheme, estimateShortSec } from '@app/types';
+import { type JobStatus, type LanguageCode, SHORT_IDEAL_SEC, SHORT_MAX_SEC, type ShortCaptionStyle, type ShortScriptStyle, type ShortTheme, estimateShortSec, fitTags } from '@app/types';
 
 /** The renderer's gradients (workers/processing/audiobook_worker/shorts/render.py), for the preview. */
 export const SHORT_THEMES: Record<ShortTheme, { label: string; top: string; bottom: string; light?: boolean }> = {
@@ -49,3 +49,16 @@ export const formatHashtags = (tags: string[]) => tags.map((t) => `#${t}`).join(
 
 /** What to paste into YouTube's description box. */
 export const youtubeDescription = (description: string, hashtags: string[]) => [description.trim(), formatHashtags(hashtags)].filter(Boolean).join('\n\n');
+
+export const SHORT_ACCENTS = [
+  { value: '#FACC15', label: 'Yellow' },
+  { value: '#A3E635', label: 'Lime' },
+  { value: '#22D3EE', label: 'Cyan' },
+  { value: '#F472B6', label: 'Pink' },
+  { value: '#FB923C', label: 'Orange' },
+  { value: '#FFFFFF', label: 'White' },
+];
+
+/** The tags field: "Tagore, the postmaster, audiobook" ⇄ ["Tagore", "the postmaster", "audiobook"] (cleaned, ≤ 500 characters). */
+export const parseTags = (raw: string) => fitTags(raw.split(/[,\n]+/));
+export const formatTags = (tags: string[]) => tags.join(', ');

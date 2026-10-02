@@ -58,3 +58,18 @@ export type ImportEvent =
   | { type: 'progress'; phase: 'inspecting' }
   | { type: 'done'; project: ProjectDetail }
   | { type: 'error'; error: UserFacingError };
+
+/** Library catalogue names → how a reader writes them: "Austen, Jane, 1775-1817" → "Jane Austen". */
+export function displayAuthor(author?: string): string | undefined {
+  if (!author) return undefined;
+  const plain = author
+    .replace(/,?\s*\(?(?:(?:b|d|fl|ca)\.\s*\d{3,4}\??|\d{3,4}\??\s*-\s*(?:\d{3,4}\??)?)\)?\.?\s*$/i, '') // life dates: "1775-1817", "1812-", "b. 1843?"
+    .replace(/\s*\([^)]*\)\s*$/, '') // "(William Butler)" expansions
+    .trim()
+    .replace(/,$/, '');
+  const parts = plain.split(',').map((p) => p.trim()).filter(Boolean);
+  // "Surname, Given names" — not "Rabindranath Tagore, রবীন্দ্রনাথ ঠাকুর" or "Marcus Aurelius, Emperor of Rome".
+  const surname = parts[0]?.split(/\s+/) ?? [];
+  const isSurname = surname.length === 1 || (surname.length === 2 && /^(?:de|da|di|du|la|le|van|von|der|del)$/i.test(surname[0]));
+  return parts.length === 2 && isSurname && !/\d/.test(plain) ? `${parts[1]} ${parts[0]}` : plain || author;
+}

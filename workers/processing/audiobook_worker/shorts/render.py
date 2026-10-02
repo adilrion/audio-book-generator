@@ -56,6 +56,10 @@ BANGLA_FONTS = [
 ]
 _BENGALI = re.compile(r"[ঀ-৿]")
 POP_SECONDS = 0.12
+# The thumbnail opens the video this long (so it can be picked as the cover frame in the YouTube
+# app), fading into the first caption during the last FADE seconds.
+INTRO_SECONDS = 0.25
+INTRO_FADE = 0.08
 
 
 @functools.lru_cache(maxsize=32)
@@ -157,6 +161,18 @@ def cover_background(path: str, W: int, H: int, zoom: float) -> np.ndarray:
     t = np.linspace(0.0, 1.0, BH, dtype=np.float32)[:, None, None]
     img = img * (0.5 - 0.18 * t)  # darker towards the bottom, where the captions sit
     return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def fill_frame(path: str, W: int, H: int) -> np.ndarray:
+    """An image scaled to cover the whole frame (BGR), centred."""
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise WorkerError("SHORT_THUMBNAIL_UNREADABLE", "The thumbnail image could not be read.", {"path": path})
+    ih, iw = img.shape[:2]
+    s = max(W / iw, H / ih)
+    img = cv2.resize(img, (max(W, int(round(iw * s))), max(H, int(round(ih * s)))), interpolation=cv2.INTER_AREA)
+    y0, x0 = (img.shape[0] - H) // 2, (img.shape[1] - W) // 2
+    return np.ascontiguousarray(img[y0:y0 + H, x0:x0 + W])
 
 
 def cover_card(path: str, max_w: int, max_h: int, radius: int) -> np.ndarray:
@@ -370,6 +386,8 @@ class ShortCompositor:
             self.statics = []
         self.captions = Captions(params.get("groups") or [], self.W, self.H, look, center_y, params.get("language", "en"))
         self._gi = 0
+        intro = params.get("introPath")
+        self.intro = fill_frame(intro, self.W, self.H) if intro and os.path.exists(intro) else None
 
     def _zoomed(self, t: float) -> np.ndarray:
         """Slow push-in on the blurred cover (1.0 → 1.07 over the short)."""
@@ -391,6 +409,14 @@ class ShortCompositor:
         return self._gi if g["start"] <= t < g["end"] or (self._gi == len(groups) - 1 and t >= g["start"]) else -1
 
     def frame(self, t: float) -> np.ndarray:
+        if self.intro is not None and t < INTRO_SECONDS:
+            if t < INTRO_SECONDS - INTRO_FADE:
+                return self.intro.copy()
+            a = (t - (INTRO_SECONDS - INTRO_FADE)) / INTRO_FADE
+            return cv2.addWeighted(self._frame(t), a, self.intro, 1 - a, 0)
+        return self._frame(t)
+
+    def _frame(self, t: float) -> np.ndarray:
         if self.zoom_bg is not None:
             img = self._zoomed(t)
             for p in self.statics:

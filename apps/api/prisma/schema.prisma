@@ -98,6 +98,10 @@ model Short {
   /// YouTube description and hashtags (written by the local AI with the script, or by hand)
   description     String    @default("")
   hashtags        String[]  @default([])
+  /// YouTube tags (Studio's "Tags" field)
+  tags            String[]  @default([])
+  /// ShortThumbnail: how thumbnail.jpg was designed (so it can be edited again)
+  thumbnail       Json?
   /// ShortSettings: language, voice, look
   settings        Json
   /// The book the script was written from (its cover can be the background)

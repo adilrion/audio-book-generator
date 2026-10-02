@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Prisma } from '@prisma/client';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '@app/config';
 import type { PrismaService } from '../src/prisma/prisma.service';
@@ -28,10 +29,12 @@ function setup(opts: { enqueueFails?: boolean } = {}) {
     },
     findUnique: async ({ where }: { where: Row }) => {
       const r = rows.find((x) => x.id === where.id);
-      return r ? { ...r, project: r.projectId ? { name: 'The Postmaster' } : null } : null;
+      return r ? { ...r, project: r.projectId ? { name: 'The Postmaster', document: { author: 'Tagore, Rabindranath' } } : null } : null;
     },
     findMany: async () => rows.map((r) => ({ ...r, project: null })),
-    update: async ({ where, data }: { where: Row; data: Row }) => Object.assign(rows.find((x) => x.id === where.id)!, data),
+    // Like Prisma: the DbNull sentinel is stored as NULL.
+    update: async ({ where, data }: { where: Row; data: Row }) =>
+      Object.assign(rows.find((x) => x.id === where.id)!, Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === Prisma.DbNull ? null : v]))),
     updateMany: async ({ where, data }: { where: Row; data: Row }) => {
       const hit = rows.filter((r) => matches(r, where));
       hit.forEach((r) => Object.assign(r, data));
@@ -50,7 +53,7 @@ function setup(opts: { enqueueFails?: boolean } = {}) {
   const projects = {
     get: async (id: string) => {
       if (id !== BOOK) throw Object.assign(new Error('Project not found.'), { code: 'NOT_FOUND' });
-      return { id, name: 'The Postmaster', document: { author: 'Tagore' } };
+      return { id, name: 'The Postmaster', document: { author: 'Tagore, Rabindranath' } };
     },
     pageImage: async () => {
       const f = path.join(tmp, 'page-1.jpg');
@@ -133,6 +136,45 @@ describe('ShortsService', () => {
     const t = setup();
     await expect(t.svc.generateScript({ source: { kind: 'topic', topic: 'Black holes' }, language: 'en', seconds: 60, style: 'hook' })).rejects.toMatchObject({ code: 'CONFLICT' });
     await expect(t.svc.generateScript({ source: { kind: 'topic', topic: 'x' }, language: 'en', seconds: 60, style: 'hook' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('suggests YouTube tags from the book when none are given, and cleans given ones', async () => {
+    const t = setup();
+    const s = await t.svc.create({ title: 'A lonely postmaster', script: SCRIPT, projectId: BOOK, hashtags: ['Shorts', 'TagoreStories'] });
+    expect(s.tags.slice(0, 3)).toEqual(['The Postmaster', 'The Postmaster Rabindranath Tagore', 'Rabindranath Tagore']);
+    expect(s.tags).toContain('Tagore Stories');
+    expect(s.bookAuthor).toBe('Tagore, Rabindranath');
+    const own = await t.svc.create({ title: 'T', script: SCRIPT, tags: ['one, two', '#three', 'one two'] });
+    expect(own.tags).toEqual(['one two', 'three']);
+  });
+
+  it('lets the YouTube text and thumbnail change while the video renders, nothing else', async () => {
+    const t = setup();
+    const s = await t.svc.create({ title: 'T', script: SCRIPT, render: true });
+    const d = await t.svc.update(s.id, { description: 'New text', tags: ['tag'], thumbnail: { layout: 'headline', headline: 'Hi *there*', kicker: '', accent: '#FACC15' } });
+    expect(d).toMatchObject({ description: 'New text', tags: ['tag'], thumbnail: { headline: 'Hi *there*' }, queued: true });
+    await expect(t.svc.update(s.id, { title: 'Other' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(t.svc.update(s.id, { settings: { look: { thumbnailIntro: true } } })).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('stores only JPEG thumbnails and removes them again', async () => {
+    const t = setup();
+    const s = await t.svc.create({ title: 'T', script: SCRIPT });
+    await expect(t.svc.saveThumbnail(s.id, Buffer.from('<svg/>'))).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]);
+    const saved = await t.svc.saveThumbnail(s.id, jpeg);
+    expect(saved.thumbnailVersion).toBeTruthy();
+    expect(saved.outputs.map((o) => o.name)).toContain('thumbnail.jpg');
+    expect(fs.readFileSync(t.svc.outputPath(s.id, 'thumbnail.jpg'))).toEqual(jpeg);
+    const removed = await t.svc.deleteThumbnail(s.id);
+    expect(removed.thumbnailVersion).toBeUndefined();
+    expect(removed.thumbnail).toBeUndefined();
+  });
+
+  it('writes YouTube details only with the local AI turned on', async () => {
+    const t = setup();
+    await expect(t.svc.generateMetadata({ title: 'T', script: SCRIPT, language: 'en' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(t.svc.generateMetadata({ title: 'T', script: '  ', language: 'en' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('takes the book excerpt from its first real chapter', async () => {

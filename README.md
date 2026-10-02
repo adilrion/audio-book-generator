@@ -749,12 +749,15 @@ enqueues a job.
 | `GET /shorts` | | `ShortSummary[]` (newest first) |
 | `GET /shorts/defaults` | | `ShortSettings` for a new short (voice from `.env`) |
 | `POST /shorts` | `{ title, script, description?, hashtags?, settings?, projectId?, render? }` (`settings`: partial `{ language, tts, look }`) | `ShortDetail`. `render: true` queues it at once. `400` for invalid settings (e.g. Kokoro with Bangla), `404` for an unknown book. |
-| `PATCH /shorts/:id` | same fields, all optional | `ShortDetail`. `409` while rendering. |
+| `PATCH /shorts/:id` | same fields, all optional, plus `tags` and `thumbnail` (the design, `null` removes it) | `ShortDetail`. While rendering only `description`, `hashtags`, `tags` and `thumbnail` may change (`409` otherwise). Empty `tags` are replaced by suggested ones. |
 | `POST /shorts/:id/render` | | `{ jobId }` on the `shorts` queue. `400` for an empty script or one far over 3 minutes, `409` while queued or rendering. |
 | `POST /shorts/:id/cancel` | | `{ ok }`. A queued short is cancelled at once, a running one within ~1.5 s. |
 | `DELETE /shorts/:id` | | `{ ok }`; removes `storage/shorts/<id>`. `409` while rendering. |
 | `POST /shorts/script` | `{ source: { kind: "topic", topic } \| { kind: "book", projectId }, language, seconds: 15–180, style: "hook" \| "summary" \| "story" }` | `{ title, script, description, hashtags, model }` written by the local AI — **not saved** (10–60 s; closing the request stops the model). `409` when `LLM_ENABLED=false`, `503` when Ollama is down. |
-| `GET /shorts/:id/output/:name` | `short.mp4` or `short.srt`; `?inline=1`, `?as=<file name>` | File with HTTP Range support |
+| `POST /shorts/metadata` | `{ title, script, language, projectId? }` | `{ description, hashtags, tags, model }` for a hand-written script, by the local AI — **not saved** |
+| `PUT /shorts/:id/thumbnail` | raw JPEG body (`Content-Type: image/jpeg`), ≤ 2 MB | `ShortDetail`; saved as `thumbnail.jpg`. `400` for anything but a JPEG. The design goes with `PATCH /shorts/:id` `{ thumbnail }`. |
+| `DELETE /shorts/:id/thumbnail` | | `ShortDetail` |
+| `GET /shorts/:id/output/:name` | `short.mp4`, `short.srt` or `thumbnail.jpg`; `?inline=1`, `?as=<file name>` | File with HTTP Range support |
 | `GET /system/health` | `?fresh=1` bypasses the 15 s cache | `HealthReport` `{ok, checks[{name, ok, required, message, fix?}]}`: the doctor's checks plus DB and Redis |
 | `GET /system/voices` | `?engine=kokoro\|piper\|say` (default `TTS_ENGINE`) | `{engine, available, message, voices: VoiceInfo[]}`; `400` for an unknown engine |
 | `GET /system/performance` | | `PerformanceStatus` `{prefs: {mode, quietOnBattery, paused}, plan (what runs now, e.g. quiet because on battery), modes (labels, measured speeds)}` |
@@ -884,6 +887,7 @@ storage/                                      (STORAGE_DIR)
 │   └── .work/                                concat lists / metadata during a run
 ├── shorts/<shortId>/                         YouTube Shorts
 │   ├── short.mp4  short.srt                  the video (1080×1920) and its captions
+│   ├── thumbnail.jpg                         the vertical YouTube thumbnail (drawn in the browser)
 │   ├── cover.jpg                             the book's first page, when the cover background is used
 │   └── .work/narration-<key>.flac/.json      cached narration (reused when only the look changes)
 └── models/
@@ -1174,9 +1178,24 @@ with big captions that light up word by word. A 60-second short renders in well 
    *Karaoke* (a few words, the spoken one in colour), *Highlight box*, *One word* at a time, or
    *Plain*; highlight colour, middle or lower position, capitals, title at the top, progress bar.
    The captions stay inside YouTube's safe area (clear of the title, channel name and buttons).
-4. **Create short** → the worker narrates, draws the frames and muxes the video. Then **Download MP4**
-   and upload it in YouTube Studio (or the YouTube app → + → Short) with the title and description
-   from the copy buttons; any vertical video up to 3 minutes becomes a Short.
+4. **YouTube details.** Description, hashtags and **tags** (YouTube Studio's Tags box). Generating the
+   script with AI fills them; for a script you wrote, **Write with AI** reads it and writes them, and
+   **Suggest tags** builds tags instantly without the AI: the book, *book + author*, the author,
+   *book audiobook / summary*, *author books*, the title, CamelCase hashtags as words, then broader
+   phrases (*audiobook*, *booktok*, or *বাংলা অডিওবুক*, *bangla golpo* for Bangla) and *shorts*.
+   Most specific first, at most 15, always inside YouTube's 500-character budget. Left empty, the
+   suggested tags are saved.
+5. **Create short** → the worker narrates, draws the frames and muxes the video.
+6. **Thumbnail** (on the short's page): a vertical 1080 × 1920 image in the short's own look —
+   *Big hook* (huge words on its background), *Book cover* (the cover with the hook under it) or
+   *Quote* (the script's first line). Put `*stars*` around the words to colour; add a small label
+   such as "60-second audiobook". **Save thumbnail** stores exactly the JPEG shown (≤ 2 MB).
+   **Open the video with the thumbnail** shows it for the first quarter-second, so you can pick it
+   as the cover frame in the YouTube app (needs a new render).
+7. **Upload.** Download the MP4 (and thumbnail.jpg) and upload in YouTube Studio or the YouTube app
+   with the title, description and tags from the copy buttons; any vertical video up to 3 minutes
+   becomes a Short. Upload the thumbnail where YouTube offers a custom thumbnail for your Short;
+   otherwise choose the opening frame as the cover.
 
 How it is made: the script is narrated sentence by sentence like a chapter (exact sentence times
 from sample counts); the captions show the words **as written** ("1891", "e.g."), timed against what

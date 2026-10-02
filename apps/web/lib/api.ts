@@ -19,10 +19,13 @@ import type {
   PublishDraft,
   PublishState,
   ShortDetail,
+  ShortMetadataRequest,
+  ShortMetadataResult,
   ShortScriptRequest,
   ShortScriptResult,
   ShortSettings,
   ShortSummary,
+  ShortThumbnail,
   StepRecord,
   TextRepair,
   Timeline,
@@ -176,7 +179,9 @@ export interface ShortInput {
   script?: string;
   description?: string;
   hashtags?: string[];
-  settings?: Partial<ShortSettings>;
+  tags?: string[];
+  thumbnail?: ShortThumbnail | null;
+  settings?: Partial<Omit<ShortSettings, 'look'>> & { look?: Partial<ShortSettings['look']> };
   projectId?: string | null;
   /** Start rendering right away. */
   render?: boolean;
@@ -224,6 +229,11 @@ export const api = {
   deleteShort: (id: string) => request<{ ok: boolean }>(`/shorts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   /** Local AI writes a script (20–60 s). Aborting the signal stops the model. Nothing is saved. */
   generateShortScript: (body: ShortScriptRequest, signal?: AbortSignal) => request<ShortScriptResult>('/shorts/script', { ...json('POST', body), signal }),
+  /** Local AI writes the YouTube description, hashtags and tags for a script. Nothing is saved. */
+  generateShortMetadata: (body: ShortMetadataRequest, signal?: AbortSignal) => request<ShortMetadataResult>('/shorts/metadata', { ...json('POST', body), signal }),
+  uploadShortThumbnail: (id: string, jpeg: Blob) =>
+    request<ShortDetail>(`/shorts/${encodeURIComponent(id)}/thumbnail`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg }),
+  deleteShortThumbnail: (id: string) => request<ShortDetail>(`/shorts/${encodeURIComponent(id)}/thumbnail`, { method: 'DELETE' }),
   health: (fresh = false, signal?: AbortSignal) => request<HealthReport>(`/system/health${fresh ? '?fresh=1' : ''}`, { signal }),
   voices: (engine: string, signal?: AbortSignal) => request<VoicesResponse>(`/system/voices?engine=${encodeURIComponent(engine)}`, { signal }),
   config: (signal?: AbortSignal) => request<SystemConfig>('/system/config', { signal }),

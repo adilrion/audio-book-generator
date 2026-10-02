@@ -314,9 +314,10 @@ export function youtubeTagChars(tags: string[]): number {
   return tags.reduce((n, t) => n + [...t].length + (/\s/.test(t) ? 2 : 0), 0) + tags.length - 1;
 }
 
-/** One YouTube tag: no commas, quotes, angle brackets or `#`; single spaces; at most 60 characters. */
+/** One YouTube tag: no commas, quotes, angle brackets, `#` or zero-width characters; single spaces; at most 60 characters. */
 export function sanitizeTag(raw: string): string {
   return raw
+    .replace(/[\u200b-\u200d\u2060\ufeff]/g, '') // stray joiners from PDF text make a different search phrase
     .replace(/[<>,"#]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

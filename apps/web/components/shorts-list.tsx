@@ -21,7 +21,10 @@ function ShortCard({ s }: { s: ShortSummary }) {
     <li>
       <Link href={`/shorts/${s.id}`} className="group grid gap-2.5 rounded-lg ring-offset-4 ring-offset-background outline-none focus-visible:ring-[3px] focus-visible:ring-ring/60">
         <span className="relative aspect-[9/16] overflow-hidden rounded-xl shadow-book transition-transform duration-300 group-hover:-translate-y-0.5" style={{ background: `linear-gradient(180deg, ${t.top}, ${t.bottom})` }}>
-          {s.status === 'COMPLETED' && s.version ? (
+          {s.thumbnailVersion ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the saved thumbnail from the local API
+            <img src={shortOutputUrl(s.id, 'thumbnail.jpg', { inline: true, v: s.thumbnailVersion })} alt="" className="absolute inset-0 size-full object-cover" />
+          ) : s.status === 'COMPLETED' && s.version ? (
             <video src={`${shortOutputUrl(s.id, 'short.mp4', { inline: true, v: s.version })}#t=1.5`} muted playsInline preload="metadata" className="absolute inset-0 size-full object-cover" aria-hidden />
           ) : (
             <span className="absolute inset-x-[10%] top-1/2 -translate-y-1/2 text-center font-serif text-lg leading-snug font-medium text-balance text-white/90 [text-shadow:0_1px_8px_rgb(0_0_0/0.4)]">

@@ -1,4 +1,6 @@
 import type { OutputFile } from './api';
+import { displayAuthor } from './library';
+import { fitTags } from './publish';
 import type { LanguageCode, TTSSettings } from './settings';
 import type { JobStatus, UserFacingError } from './status';
 
@@ -30,7 +32,30 @@ export interface ShortLook {
   showTitle: boolean;
   /** A thin progress bar along the top edge. */
   showProgress: boolean;
+  /**
+   * Open the video with the thumbnail for a quarter of a second, so it can be picked as the cover
+   * frame in the YouTube app. Needs a saved thumbnail.
+   */
+  thumbnailIntro?: boolean;
 }
+
+/**
+ * `headline`: a huge hook on the short's background. `cover`: the book cover with the hook under it.
+ * `quote`: the script's first line in quotes.
+ */
+export type ShortThumbLayout = 'headline' | 'cover' | 'quote';
+
+/** How the vertical thumbnail (1080×1920) is drawn; it is rendered in the browser and saved as thumbnail.jpg. */
+export interface ShortThumbnail {
+  layout: ShortThumbLayout;
+  /** The big text. Words in *asterisks* are drawn in the accent colour. Empty: the title. */
+  headline: string;
+  /** Small pill above the headline, e.g. "60-second audiobook". */
+  kicker: string;
+  accent: string;
+}
+
+export const SHORT_THUMB_SIZE = { width: 1080, height: 1920 } as const;
 
 export interface ShortSettings {
   language: LanguageCode;
@@ -82,6 +107,8 @@ export interface ShortSummary {
   updatedAt: string;
   /** Changes whenever a new video is rendered (cache-busting for the player). */
   version?: string;
+  /** Set when a thumbnail is saved; changes with every save. */
+  thumbnailVersion?: string;
 }
 
 export interface ShortDetail extends ShortSummary {
@@ -89,6 +116,12 @@ export interface ShortDetail extends ShortSummary {
   /** YouTube description (editable; the AI writes one with the script). */
   description: string;
   hashtags: string[];
+  /** YouTube tags (the Studio "Tags" field), within YouTube's 500-character budget. */
+  tags: string[];
+  /** The saved thumbnail design (the image itself is thumbnail.jpg). */
+  thumbnail?: ShortThumbnail;
+  /** The book's author, when the short was made from a book. */
+  bookAuthor?: string;
   settings: ShortSettings;
   /** What the worker is doing now, or why it failed. */
   message?: string;
@@ -114,5 +147,53 @@ export interface ShortScriptResult {
   script: string;
   description: string;
   hashtags: string[];
+  tags: string[];
   model: string;
 }
+
+/** POST /shorts/metadata: YouTube text for a script the user wrote. */
+export interface ShortMetadataRequest {
+  title: string;
+  script: string;
+  language: LanguageCode;
+  projectId?: string;
+}
+
+export interface ShortMetadataResult {
+  description: string;
+  hashtags: string[];
+  tags: string[];
+  model: string;
+}
+
+/** "TheAlchemist" → "The Alchemist"; "followyourheart" stays as it is. */
+const unCamel = (s: string) => s.replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2');
+
+/**
+ * YouTube tags without the AI: the book, its author and the audiobook/Shorts phrases people search,
+ * plus the hashtags as words. Earlier tags count most, so the most specific ones come first; the
+ * list fits YouTube's 500-character budget.
+ */
+export function suggestShortTags(o: { title: string; hashtags?: string[]; bookTitle?: string; author?: string; language: LanguageCode }): string[] {
+  const book = o.bookTitle?.split(/\s+:\s+/)[0].trim();
+  const author = displayAuthor(o.author);
+  const bn = o.language === 'bn';
+  const tags: (string | false | undefined)[] = [
+    book,
+    book && author && `${book} ${author}`,
+    author,
+    book && (bn ? `${book} অডিওবুক` : `${book} audiobook`),
+    book && !bn && `${book} summary`,
+    author && !bn && `${author} books`,
+    [...o.title].length <= 60 ? o.title.replace(/[*#]/g, '').trim() : undefined,
+    // Hashtags make tags only when they read as words: "TheAlchemist" → "The Alchemist", Bangla as is (not "paulocoelho").
+    ...(o.hashtags ?? []).filter((h) => !/^shorts$/i.test(h) && (/\p{Lu}/u.test(h) || /[^\p{Script=Latin}\p{N}_]/u.test(h))).map(unCamel),
+    ...(bn ? ['বাংলা অডিওবুক', 'bangla audiobook', 'বাংলা গল্প', 'bangla golpo'] : book ? ['audiobook', 'book summary', 'booktok', 'books'] : []),
+    'shorts',
+    'youtube shorts',
+  ];
+  return fitTags(tags.filter((t): t is string => !!t)).slice(0, SHORT_MAX_TAGS);
+}
+
+/** YouTube suggests a handful of tags; past ~15 they add nothing. */
+export const SHORT_MAX_TAGS = 15;

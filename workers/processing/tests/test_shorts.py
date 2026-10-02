@@ -99,3 +99,14 @@ def test_render_short_writes_a_vertical_video(tmp_path):
                            capture_output=True, text=True, check=True)
     s = json.loads(probe.stdout)["streams"][0]
     assert (s["width"], s["height"]) == (216, 384)
+
+
+def test_thumbnail_opens_the_video_and_fades_into_the_captions(tmp_path):
+    thumb = tmp_path / "thumbnail.jpg"
+    Image.new("RGB", (540, 960), (10, 200, 60)).save(thumb)
+    comp = ShortCompositor(params(tmp_path, introPath=str(thumb)))
+    first, mid, after = comp.frame(0.0), comp.frame(0.21), comp.frame(0.3)
+    assert abs(int(first[192, 108, 1]) - 200) < 12 and first[192, 108, 2] < 30  # the green thumbnail, full frame
+    assert 0 < np.abs(mid.astype(int) - first.astype(int)).mean()  # fading out
+    assert not (abs(int(after[192, 108, 1]) - 200) < 12 and after[192, 108, 2] < 30)  # the short itself
+    assert ShortCompositor(params(tmp_path, introPath=str(tmp_path / "missing.jpg"))).intro is None

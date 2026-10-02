@@ -4,8 +4,8 @@ import { YOUTUBE_LIMITS } from '@app/types';
 import { badRequest } from '../common/errors';
 import { PublishService } from './publish.service';
 
-/** Read a raw request body (the thumbnail JPEG), refusing more than `max` bytes. */
-async function readBody(req: Request, max: number): Promise<Buffer> {
+/** Read a raw request body (a thumbnail JPEG), refusing more than `max` bytes. */
+export async function readBody(req: Request, max: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {

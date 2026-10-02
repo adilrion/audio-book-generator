@@ -1,7 +1,7 @@
 'use client';
 
-import { DEFAULT_SHORT_LOOK, type LanguageCode, type ShortDetail, type ShortScriptStyle, type ShortSettings, type ShortTheme } from '@app/types';
-import { BookOpen, Captions, LoaderCircle, Mic, Palette, PenLine, Play, Save, Sparkles, Square, TriangleAlert, Type } from 'lucide-react';
+import { DEFAULT_SHORT_LOOK, type LanguageCode, type ShortDetail, type ShortScriptStyle, type ShortSettings, type ShortTheme, YOUTUBE_LIMITS, suggestShortTags, youtubeTagChars } from '@app/types';
+import { BookOpen, Captions, LoaderCircle, Mic, Palette, PenLine, Play, Save, Sparkles, Square, Tags, TriangleAlert, Type, Wand2 } from 'lucide-react';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
 import { CheckedMark, ColorSwatches, Field, FormSection, ToggleList, ToggleRow, VoiceFields } from '@/components/settings-form';
@@ -16,18 +16,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useApi } from '@/hooks/use-api';
 import { type ApiError, api, pageImageUrl, toApiError } from '@/lib/api';
-import { CAPTION_STYLES, SCRIPT_LENGTHS, SCRIPT_STYLES, SHORT_THEMES, formatHashtags, lengthVerdict, parseHashtags } from '@/lib/shorts';
+import { CAPTION_STYLES, SCRIPT_LENGTHS, SCRIPT_STYLES, SHORT_ACCENTS, SHORT_THEMES, formatHashtags, formatTags, lengthVerdict, parseHashtags, parseTags } from '@/lib/shorts';
 import { cn } from '@/lib/utils';
 import { applyLanguage } from '@/lib/voices';
-
-const ACCENTS = [
-  { value: '#FACC15', label: 'Yellow' },
-  { value: '#A3E635', label: 'Lime' },
-  { value: '#22D3EE', label: 'Cyan' },
-  { value: '#F472B6', label: 'Pink' },
-  { value: '#FB923C', label: 'Orange' },
-  { value: '#FFFFFF', label: 'White' },
-];
 
 const FALLBACK: ShortSettings = { language: 'en', tts: { engine: 'kokoro', voice: 'af_heart', speed: 1 }, look: { ...DEFAULT_SHORT_LOOK } };
 const clone = (s: ShortSettings): ShortSettings => JSON.parse(JSON.stringify(s)) as ShortSettings;
@@ -41,7 +32,7 @@ function Rail({ children }: { children: ReactNode }) {
  * (from a topic or one of the user's books); the preview on the right follows every change.
  */
 export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { initial?: ShortDetail; initialProjectId?: string; onSaved: (s: ShortDetail) => void; onCancel?: () => void }) {
-  const ids = { title: useId(), script: useId(), topic: useId(), desc: useId(), tags: useId(), accent: useId() };
+  const ids = { title: useId(), script: useId(), topic: useId(), desc: useId(), hashtags: useId(), tags: useId(), accent: useId() };
   const config = useApi('config', (signal) => api.config(signal));
   const defaults = useApi(initial ? null : 'short-defaults', (signal) => api.shortDefaults(signal));
   const projects = useApi('projects', (signal) => api.listProjects(signal));
@@ -50,6 +41,7 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
   const [script, setScript] = useState(initial?.script ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [hashtags, setHashtags] = useState(initial ? formatHashtags(initial.hashtags) : '');
+  const [tags, setTags] = useState(initial ? formatTags(initial.tags) : '');
   const [settings, setSettings] = useState<ShortSettings>(() => clone(initial?.settings ?? FALLBACK));
   const [projectId, setProjectId] = useState<string | null>(initial?.projectId ?? initialProjectId ?? null);
   const touched = useRef(!!initial);
@@ -104,6 +96,7 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
       setScript(r.script);
       setDescription(r.description);
       setHashtags(formatHashtags(r.hashtags));
+      setTags(formatTags(r.tags));
       setAiModel(r.model);
       if (source === 'book' && aiBook) {
         setProjectId(aiBook);
@@ -136,7 +129,7 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
   const save = async (render: boolean) => {
     setSaving(render ? 'render' : 'draft');
     setSaveError(undefined);
-    const body = { title: title.trim() || 'Untitled short', script, description, hashtags: parseHashtags(hashtags), settings, projectId, render };
+    const body = { title: title.trim() || 'Untitled short', script, description, hashtags: parseHashtags(hashtags), tags: parseTags(tags), settings, projectId, render };
     try {
       onSaved(initial ? await api.updateShort(initial.id, body) : await api.createShort(body));
     } catch (e) {
@@ -146,6 +139,32 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
   };
 
   const coverUrl = projectId ? pageImageUrl(projectId, 1) : undefined;
+  const book = books.find((b) => b.id === projectId);
+  const tagList = parseTags(tags);
+  const tagChars = youtubeTagChars(tagList);
+  const suggestTags = () => setTags(formatTags(suggestShortTags({ title: title.trim() || script.slice(0, 60), hashtags: parseHashtags(hashtags), bookTitle: book?.name, author: book?.author, language: settings.language })));
+
+  // ── AI YouTube details (for a script written by hand) ──
+  const [detailing, setDetailing] = useState(false);
+  const [detailError, setDetailError] = useState<ApiError>();
+  const writeDetails = async () => {
+    aiCtrl.current?.abort();
+    const c = new AbortController();
+    aiCtrl.current = c;
+    setDetailing(true);
+    setDetailError(undefined);
+    try {
+      const r = await api.generateShortMetadata({ title: title.trim() || 'Untitled short', script, language: settings.language, projectId: projectId ?? undefined }, c.signal);
+      setDescription(r.description);
+      setHashtags(formatHashtags(r.hashtags));
+      setTags(formatTags(r.tags));
+    } catch (e) {
+      if (!c.signal.aborted) setDetailError(toApiError(e));
+    } finally {
+      if (aiCtrl.current === c) aiCtrl.current = null;
+      setDetailing(false);
+    }
+  };
   const llmOff = config.data && !config.data.llm.enabled;
 
   const actions = (className?: string) => (
@@ -377,7 +396,7 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
             </RadioGroup>
           </Field>
           <Field label="Highlight colour">
-            <ColorSwatches id={ids.accent} label="Highlight colour" colors={ACCENTS} value={settings.look.accent} onChange={(hex) => updateLook((d) => void (d.look.accent = hex))} />
+            <ColorSwatches id={ids.accent} label="Highlight colour" colors={SHORT_ACCENTS} value={settings.look.accent} onChange={(hex) => updateLook((d) => void (d.look.accent = hex))} />
           </Field>
           <Field label="Caption position">
             <Segmented value={settings.look.position} onValueChange={(v) => updateLook((d) => void (d.look.position = v as 'center' | 'lower'))} aria-label="Caption position">
@@ -393,12 +412,36 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
         </FormSection>
 
         {/* ── YouTube ── */}
-        <FormSection step={4} title="YouTube details" description="Not in the video — ready to paste when you upload. The AI fills them with the script.">
+        <FormSection step={4} icon={<Tags />} title="YouTube details" description="Not in the video — ready to paste when you upload. Generating the script with AI fills them too.">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => void writeDetails()} disabled={detailing || writing || !script.trim() || !!llmOff}>
+              {detailing ? <LoaderCircle className="animate-spin" aria-hidden /> : <Sparkles aria-hidden />} Write with AI
+            </Button>
+            <span className="text-xs text-muted-foreground">{detailing ? 'The local AI is reading your script…' : 'Description, hashtags and tags from your script.'}</span>
+          </div>
+          {detailError && <ApiErrorAlert error={detailError} title="The YouTube details could not be written" onRetry={() => void writeDetails()} />}
           <Field label="Description" htmlFor={ids.desc}>
             <Textarea id={ids.desc} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} rows={3} placeholder="Two short sentences about the video." />
           </Field>
-          <Field label="Hashtags" htmlFor={ids.tags} hint="#Shorts helps YouTube file it as a Short.">
-            <Input id={ids.tags} value={hashtags} onChange={(e) => setHashtags(e.target.value)} placeholder="#Shorts #Audiobook #Tagore" className="h-10" />
+          <Field label="Hashtags" htmlFor={ids.hashtags} hint="Go at the end of the description. #Shorts helps YouTube file it as a Short; 3–5 hashtags are plenty.">
+            <Input id={ids.hashtags} value={hashtags} onChange={(e) => setHashtags(e.target.value)} placeholder="#Shorts #Audiobook #Tagore" className="h-10" />
+          </Field>
+          <Field
+            label={
+              <>
+                Tags
+                <span className={cn('ml-auto text-xs font-normal tabular', tagChars > YOUTUBE_LIMITS.tagsChars * 0.9 ? 'text-warning-foreground dark:text-warning' : 'text-muted-foreground')}>
+                  {tagList.length} tags · {tagChars}/{YOUTUBE_LIMITS.tagsChars}
+                </span>
+              </>
+            }
+            htmlFor={ids.tags}
+            hint="For YouTube Studio’s Tags box, separated by commas. Most specific first (book, author), then broader ones. Left empty, suggested tags are used."
+          >
+            <Textarea id={ids.tags} value={tags} onChange={(e) => setTags(e.target.value)} rows={2} placeholder="the alchemist, paulo coelho, the alchemist audiobook, audiobook, shorts" />
+            <Button variant="ghost" size="sm" className="justify-self-start" onClick={suggestTags} disabled={!title.trim() && !script.trim()}>
+              <Wand2 aria-hidden /> Suggest tags
+            </Button>
           </Field>
         </FormSection>
 

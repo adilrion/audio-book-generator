@@ -13,6 +13,8 @@ export interface ProjectSummary {
   pageCount: number;
   wordCount: number;
   durationSec?: number;
+  /** From the PDF's metadata. */
+  author?: string;
 }
 
 export interface ProjectDetail extends ProjectSummary {

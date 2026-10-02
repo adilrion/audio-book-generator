@@ -79,8 +79,24 @@ export const narrationKey = (input: ShortRenderInput, ttsVersion: string) =>
   hashKey('short-narration-v1', input.script, input.settings.language, input.settings.tts, ttsVersion);
 
 /** What the finished video depends on (to tell when it is out of date). */
-export const shortRenderKey = (input: Pick<ShortRenderInput, 'title' | 'script' | 'settings'>, hasCover: boolean) =>
-  hashKey('short-video-v1', input.title, input.script, input.settings, hasCover);
+export const shortRenderKey = (input: Pick<ShortRenderInput, 'title' | 'script' | 'settings'>, hasCover: boolean, intro: string | null = null) =>
+  hashKey('short-video-v1', input.title, input.script, input.settings, hasCover, intro);
+
+/**
+ * The image files a render uses: the cover (cover background) and the saved thumbnail (opening
+ * frame). `introStamp` changes when the thumbnail is saved again, so the video becomes out of date.
+ */
+export async function shortImages(cfg: AppConfig, id: string, look: ShortSettings['look']): Promise<{ cover?: string; intro?: string; introStamp: string | null }> {
+  const dir = new CachePaths(cfg).short(id);
+  const cover = path.join(dir, 'cover.jpg');
+  const thumb = path.join(dir, 'thumbnail.jpg');
+  const st = look.thumbnailIntro ? await fsp.stat(thumb).catch(() => null) : null;
+  return {
+    cover: look.theme === 'cover' && (await exists(cover)) ? cover : undefined,
+    intro: st ? thumb : undefined,
+    introStamp: st ? `${st.size}-${Math.round(st.mtimeMs)}` : null,
+  };
+}
 
 export async function renderShort(cfg: AppConfig, input: ShortRenderInput, o: ShortRenderOptions): Promise<{ durationSec: number; key: string }> {
   const paths = new CachePaths(cfg);
@@ -131,8 +147,8 @@ export async function renderShort(cfg: AppConfig, input: ShortRenderInput, o: Sh
   const duration = narration.duration;
   const groups = captionGroups(narration.words, { ...groupLimits(look.captions), duration });
   await atomicWrite(path.join(dir, 'short.srt'), captionsSrt(groups));
-  const cover = path.join(dir, 'cover.jpg');
-  const hasCover = look.theme === 'cover' && (await exists(cover));
+  const images = await shortImages(cfg, input.id, look);
+  const hasCover = !!images.cover;
   const video = path.join(work, 'video.mp4');
   await o.pool.call(
     'shorts.render',
@@ -143,7 +159,8 @@ export async function renderShort(cfg: AppConfig, input: ShortRenderInput, o: Sh
       title: look.showTitle ? input.title : '',
       language,
       look: { ...look, theme: look.theme === 'cover' && !hasCover ? 'midnight' : look.theme },
-      coverPath: hasCover ? cover : undefined,
+      coverPath: images.cover,
+      introPath: images.intro,
       groups,
       outPath: video,
       encoder: { codec: cfg.VIDEO_ENCODER, bitrate: cfg.VIDEO_BITRATE, crf: cfg.VIDEO_CRF, ffmpeg: cfg.FFMPEG_BIN },
@@ -157,7 +174,7 @@ export async function renderShort(cfg: AppConfig, input: ShortRenderInput, o: Sh
   await validateOutput(cfg, out, duration, SHORT_FPS);
   await fsp.rm(video, { force: true }).catch(() => undefined);
   progress('finishing', 1);
-  return { durationSec: duration, key: shortRenderKey(input, hasCover) };
+  return { durationSec: duration, key: shortRenderKey(input, hasCover, images.introStamp) };
 }
 
 /** Keep only the current narration: an edited script makes the old one useless. */

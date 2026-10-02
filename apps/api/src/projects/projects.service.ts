@@ -157,6 +157,7 @@ export class ProjectsService {
       pageCount: p.document.pageCount,
       wordCount: p.document.estimatedWords,
       durationSec: p.durationSec ?? undefined,
+      author: p.document.author ?? undefined,
     };
   }
 

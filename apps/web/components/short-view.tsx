@@ -1,6 +1,6 @@
 'use client';
 
-import type { ShortDetail } from '@app/types';
+import { type ShortDetail, suggestShortTags } from '@app/types';
 import { CircleCheck, Download, FileText, LoaderCircle, Pencil, Play, RotateCcw, Square, Trash2, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useState } from 'react';
@@ -9,6 +9,7 @@ import { CopyButton } from '@/components/copy-button';
 import { PageHeader } from '@/components/page-header';
 import { ShortEditor } from '@/components/short-editor';
 import { ShortPreview } from '@/components/short-preview';
+import { ShortThumbnailDesigner } from '@/components/short-thumbnail';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -18,7 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useApi } from '@/hooks/use-api';
 import { type ApiError, api, pageImageUrl, shortOutputUrl, toApiError } from '@/lib/api';
 import { formatBytes, formatDuration } from '@/lib/format';
-import { isShortBusy, youtubeDescription } from '@/lib/shorts';
+import { formatTags, isShortBusy, youtubeDescription } from '@/lib/shorts';
 
 function CopyBlock({ label, text, children }: { label: string; text: string; children?: ReactNode }) {
   return (
@@ -98,6 +99,8 @@ export function ShortView({ id }: { id: string }) {
   const srt = s.outputs.find((o) => o.name === 'short.srt');
   const coverUrl = s.projectId ? pageImageUrl(s.projectId, 1) : undefined;
   const failed = s.status === 'FAILED';
+  // Shorts saved before tags existed: suggest them (saved with the next edit).
+  const tags = s.tags.length ? s.tags : suggestShortTags({ title: s.title, hashtags: s.hashtags, bookTitle: s.bookTitle, author: s.bookAuthor, language: s.language });
 
   return (
     <div className="grid gap-8">
@@ -186,18 +189,36 @@ export function ShortView({ id }: { id: string }) {
           )}
           <section className="grid gap-4 rounded-2xl border bg-card p-5 shadow-card">
             <h2 className="text-[15px] font-semibold tracking-tight">Upload to YouTube</h2>
-            <ol className="grid gap-1 text-sm text-muted-foreground">
-              <li>1. Download the MP4 and open YouTube Studio → Create → Upload videos (or the YouTube app → + → Short).</li>
-              <li>2. Paste the title and description below. Vertical videos up to 3 minutes become Shorts automatically.</li>
+            <ol className="grid gap-1.5 text-sm text-muted-foreground">
+              <li>
+                1. Download the MP4{s.thumbnailVersion ? ' and the thumbnail' : ', and save a thumbnail below'}. Vertical videos up to 3 minutes become Shorts automatically.
+              </li>
+              <li>2. In YouTube Studio → Create → Upload videos (or the YouTube app → + → Short), paste the title, description and tags below.</li>
+              <li>
+                3. Thumbnail: upload thumbnail.jpg where YouTube offers a custom thumbnail for your Short; in the YouTube app you pick the cover from the video’s frames — turn on
+                “Open the video with the thumbnail” so it is one of them.
+              </li>
             </ol>
             <CopyBlock label="Title" text={s.title} />
             <CopyBlock label="Description" text={youtubeDescription(s.description, s.hashtags)} />
+            <CopyBlock label="Tags" text={formatTags(tags)}>
+              {tags.length ? (
+                <span className="flex flex-wrap gap-1.5">
+                  {tags.map((t) => (
+                    <span key={t} className="rounded-md bg-background px-1.5 py-0.5 text-xs ring-1 ring-border">
+                      {t}
+                    </span>
+                  ))}
+                </span>
+              ) : undefined}
+            </CopyBlock>
             {srt && (
               <a href={shortOutputUrl(s.id, 'short.srt', { as: uploadName(s.title), v: s.version })} download className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
                 <FileText className="size-4" aria-hidden /> Subtitles (SRT) for YouTube captions
               </a>
             )}
           </section>
+          <ShortThumbnailDesigner key={s.id} short={s} busy={busy} onChange={(d) => short.mutate(d)} />
           <section className="grid gap-2 rounded-2xl border bg-card p-5 shadow-card">
             <h2 className="text-[15px] font-semibold tracking-tight">Script</h2>
             <p className="text-sm leading-relaxed whitespace-pre-wrap" lang={s.language}>

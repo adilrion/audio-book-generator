@@ -1,5 +1,5 @@
 import { AppError } from '@app/shared';
-import { type LanguageCode, SHORT_SCRIPT_MAX_CHARS, type ShortScriptStyle, estimateShortSec } from '@app/types';
+import { type LanguageCode, SHORT_MAX_TAGS, SHORT_SCRIPT_MAX_CHARS, type ShortScriptStyle, estimateShortSec, fitTags, suggestShortTags } from '@app/types';
 import type { LLMProvider } from '../llm/provider';
 import { cleanText, clip, cleanTitle } from '../publish/generate';
 
@@ -17,6 +17,7 @@ export interface ShortScriptDraft {
   script: string;
   description: string;
   hashtags: string[];
+  tags: string[];
 }
 
 const SYSTEM =
@@ -86,6 +87,7 @@ function facts(src: ShortScriptSource, language: LanguageCode, seconds: number, 
       : 'LANGUAGE: write everything in English.',
     'SCRIPT RULES: only the words to be spoken. No emojis, hashtags, headings, bullet points, stage directions, sound cues or speaker labels. Spell out symbols.',
     'TITLE: under 70 characters, catchy but honest, no hashtags. DESCRIPTION: two short sentences for the YouTube description. HASHTAGS: 3 to 6 relevant ones, without the # sign.',
+    TAGS_RULE(language),
     book && src.excerpt.trim() ? `FROM THE BOOK (excerpt):\n"""\n${src.excerpt.trim()}\n"""` : book ? 'No text of the book is available: rely only on what is widely known about it, and stay general.' : '',
   ]
     .filter(Boolean)
@@ -98,7 +100,7 @@ export async function generateShortScript(
   opts: { language: LanguageCode; seconds: number; style: ShortScriptStyle },
   signal?: AbortSignal,
 ): Promise<ShortScriptDraft> {
-  const r = await provider.generateJson<{ title?: unknown; script?: unknown; description?: unknown; hashtags?: unknown }>(
+  const r = await provider.generateJson<{ title?: unknown; script?: unknown; description?: unknown; hashtags?: unknown; tags?: unknown }>(
     {
       system: SYSTEM,
       prompt: facts(src, opts.language, opts.seconds, opts.style),
@@ -109,8 +111,9 @@ export async function generateShortScript(
           script: { type: 'string' },
           description: { type: 'string' },
           hashtags: { type: 'array', items: { type: 'string' } },
+          tags: { type: 'array', items: { type: 'string' } },
         },
-        required: ['title', 'script', 'description', 'hashtags'],
+        required: ['title', 'script', 'description', 'hashtags', 'tags'],
       },
       maxTokens: 1500,
       temperature: 0.8,
@@ -121,10 +124,64 @@ export async function generateShortScript(
   if (estimateShortSec(script, opts.language) < 5)
     throw new AppError('LLM_BAD_OUTPUT', 'The local AI did not write a usable script.', { hint: 'Try again, or write the script yourself.', retryable: true });
   const fallbackTitle = src.kind === 'book' ? src.title : src.topic;
+  const title = cleanTitle(r.title) || clip(fallbackTitle, 90);
+  const hashtags = cleanHashtags(r.hashtags, src.kind === 'book' ? ['Audiobook'] : []);
+  const book = src.kind === 'book' ? { bookTitle: src.title, author: src.author } : {};
   return {
-    title: cleanTitle(r.title) || clip(fallbackTitle, 90),
+    title,
     script,
     description: cleanText(r.description, 1000).replace(/\n+/g, ' '),
-    hashtags: cleanHashtags(r.hashtags, src.kind === 'book' ? ['Audiobook'] : []),
+    hashtags,
+    tags: cleanTags(r.tags, suggestShortTags({ title, hashtags, language: opts.language, ...book })),
+  };
+}
+
+const TAGS_RULE = (language: LanguageCode) =>
+  `TAGS: 8 to 12 YouTube search tags — short phrases people type into YouTube search (the book or topic, the author, the genre, the theme), most specific first, without # and without commas inside a tag${language === 'bn' ? '; mix Bangla and English phrases' : ''}.`;
+
+/** The model's tags first (most specific), then the rule-based ones, within YouTube's 500 characters. */
+export function cleanTags(raw: unknown, fallback: string[]): string[] {
+  const ai = (Array.isArray(raw) ? raw : []).filter((t): t is string => typeof t === 'string').map((t) => t.replace(/^#+/, '').trim());
+  return fitTags([...ai.slice(0, 12), ...fallback]).slice(0, SHORT_MAX_TAGS);
+}
+
+/**
+ * YouTube description, hashtags and tags for a script the user wrote (the title and script stay
+ * as they are).
+ */
+export async function generateShortMetadata(
+  provider: LLMProvider,
+  src: { title: string; script: string; language: LanguageCode; bookTitle?: string; author?: string },
+  signal?: AbortSignal,
+): Promise<{ description: string; hashtags: string[]; tags: string[] }> {
+  const prompt = [
+    `YOUTUBE SHORT TITLE: ${src.title}`,
+    src.bookTitle ? `ABOUT THE BOOK: ${src.bookTitle}${src.author ? ` by ${src.author}` : ''}` : '',
+    src.language === 'bn' ? 'LANGUAGE: write the description in Bangla (Bengali script).' : 'LANGUAGE: write in English.',
+    'DESCRIPTION: two short sentences that make people watch, honest, no hashtags, no links. HASHTAGS: 3 to 6 relevant ones, without the # sign.',
+    TAGS_RULE(src.language),
+    `SCRIPT (what the voice says):\n"""\n${clip(src.script.trim(), 2500)}\n"""`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const r = await provider.generateJson<{ description?: unknown; hashtags?: unknown; tags?: unknown }>(
+    {
+      system: 'You are a YouTube SEO expert for Shorts. You write accurate, non-clickbait metadata and never invent facts. Always answer with JSON matching the schema.',
+      prompt,
+      schema: {
+        type: 'object',
+        properties: { description: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } }, tags: { type: 'array', items: { type: 'string' } } },
+        required: ['description', 'hashtags', 'tags'],
+      },
+      maxTokens: 800,
+      temperature: 0.6,
+    },
+    signal,
+  );
+  const hashtags = cleanHashtags(r.hashtags, src.bookTitle ? ['Audiobook'] : []);
+  return {
+    description: cleanText(r.description, 1000).replace(/\n+/g, ' '),
+    hashtags,
+    tags: cleanTags(r.tags, suggestShortTags({ title: src.title, hashtags, language: src.language, bookTitle: src.bookTitle, author: src.author })),
   };
 }

@@ -13,8 +13,16 @@ export const lookSchema = z
     uppercase: z.boolean(),
     showTitle: z.boolean(),
     showProgress: z.boolean(),
+    thumbnailIntro: z.boolean(),
   })
   .partial();
+
+export const thumbnailSchema = z.object({
+  layout: z.enum(['headline', 'cover', 'quote']),
+  headline: text(120),
+  kicker: text(40),
+  accent: z.string().regex(/^#[0-9a-f]{6}$/i),
+});
 
 export const shortSettingsSchema = z
   .object({
@@ -29,6 +37,10 @@ export const shortInputSchema = z.object({
   script: text(SHORT_SCRIPT_MAX_CHARS),
   description: text(5000).optional(),
   hashtags: z.array(text(60)).max(30).optional(),
+  /** YouTube tags; empty or left out: suggested from the title, book and hashtags. */
+  tags: z.array(text(100)).max(60).optional(),
+  /** The thumbnail design (null removes it); the JPEG itself is PUT to /shorts/:id/thumbnail. */
+  thumbnail: thumbnailSchema.nullable().optional(),
   settings: shortSettingsSchema.optional(),
   /** The book the script was written from (its cover can be the background). */
   projectId: z.string().uuid().nullable().optional(),
@@ -46,6 +58,13 @@ export const scriptRequestSchema = z.object({
   language: z.enum(['en', 'bn']),
   seconds: z.number().int().min(15).max(180),
   style: z.enum(['hook', 'summary', 'story']),
+});
+
+export const metadataSchema = z.object({
+  title: text(200),
+  script: text(SHORT_SCRIPT_MAX_CHARS).refine((s) => s.trim().length > 0, 'is empty'),
+  language: z.enum(['en', 'bn']),
+  projectId: z.string().uuid().optional(),
 });
 
 export const issues = (e: z.ZodError) => e.issues.map((i) => `${i.path.join('.') || 'body'} ${i.message}`).join('; ');
