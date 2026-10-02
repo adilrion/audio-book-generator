@@ -6,11 +6,11 @@ import type { Response } from 'express';
 import { diskStorage } from 'multer';
 import { loadConfig } from '@app/config';
 import { notFound } from '../common/errors';
-import { sweepIncoming } from './incoming';
+import { incomingDir, incomingFileName, sweepIncoming } from './incoming';
 import { ProjectsService } from './projects.service';
 
 const cfg = loadConfig();
-const tmpDir = path.join(cfg.storage.uploads, '.incoming');
+const tmpDir = incomingDir(cfg.storage.uploads);
 fs.mkdirSync(tmpDir, { recursive: true });
 
 @Controller('projects')
@@ -38,7 +38,7 @@ export class ProjectsController implements OnModuleInit, OnModuleDestroy {
   @Post()
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({ destination: tmpDir, filename: (_r, _f, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`) }),
+      storage: diskStorage({ destination: tmpDir, filename: (_r, _f, cb) => cb(null, incomingFileName()) }),
       limits: { fileSize: cfg.MAX_UPLOAD_MB * 1024 * 1024, files: 1 },
       // Browsers send the file name as raw UTF-8; multer's default (latin1) turns "বই.pdf" into mojibake.
       defParamCharset: 'utf8',

@@ -12,6 +12,10 @@ import type {
   ProjectSummary,
   GeneratePublishRequest,
   GeneratePublishResult,
+  ImportEvent,
+  LibraryBookDetail,
+  LibraryLanguage,
+  LibrarySearchResult,
   PublishDraft,
   PublishState,
   StepRecord,
@@ -153,6 +157,14 @@ export interface SystemConfig {
   maxUploadMb: number;
 }
 
+export interface LibrarySearchParams {
+  q?: string;
+  language?: LibraryLanguage;
+  /** Only books labelled public domain or CC BY / BY-SA (default true). */
+  free?: boolean;
+  page?: number;
+}
+
 export const api = {
   listProjects: (signal?: AbortSignal) => request<ProjectSummary[]>('/projects', { signal }),
   project: (id: string, signal?: AbortSignal) => request<ProjectDetail>(`/projects/${encodeURIComponent(id)}`, { signal }),
@@ -182,6 +194,9 @@ export const api = {
   uploadThumbnail: (id: string, jpeg: Blob) =>
     request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/thumbnail`, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg }),
   deleteThumbnail: (id: string) => request<PublishState>(`/projects/${encodeURIComponent(id)}/publish/thumbnail`, { method: 'DELETE' }),
+  librarySearch: (p: LibrarySearchParams, signal?: AbortSignal) =>
+    request<LibrarySearchResult>(`/library/search?${new URLSearchParams({ q: p.q ?? '', language: p.language ?? 'any', free: String(p.free ?? true), page: String(p.page ?? 1) })}`, { signal }),
+  libraryBook: (id: string, signal?: AbortSignal) => request<LibraryBookDetail>(`/library/archive/${encodeURIComponent(id)}`, { signal }),
   health: (fresh = false, signal?: AbortSignal) => request<HealthReport>(`/system/health${fresh ? '?fresh=1' : ''}`, { signal }),
   voices: (engine: string, signal?: AbortSignal) => request<VoicesResponse>(`/system/voices?engine=${encodeURIComponent(engine)}`, { signal }),
   config: (signal?: AbortSignal) => request<SystemConfig>('/system/config', { signal }),
@@ -246,4 +261,65 @@ export function uploadProject(file: File, opts: { settings?: Partial<ProjectSett
     xhr.send(form);
   });
   return { promise, abort: () => xhr.abort() };
+}
+
+/** A book from the online library (optionally one of its PDFs), or any link to a PDF. */
+export type ImportSource = { source: 'archive'; id: string; file?: string } | { source: 'url'; url: string };
+export type ImportProgress = Extract<ImportEvent, { type: 'progress' }>;
+
+const badResponse = (status = 0) => new ApiError({ code: 'BAD_RESPONSE', message: 'The local API sent a response the app could not read.', retryable: true }, status);
+
+/**
+ * POST /projects/import: the API downloads the PDF and creates the project, like an upload.
+ * Problems found before the download starts come back as a normal error response; after that,
+ * progress arrives as NDJSON lines ending with `done` or `error`. abort() cancels the download.
+ */
+export function importProject(source: ImportSource, opts: { settings?: Partial<ProjectSettings> | SettingsPatch; name?: string; onProgress?: (p: ImportProgress) => void } = {}): UploadHandle {
+  const ctrl = new AbortController();
+  const cancelled = () => new ApiError({ code: 'ABORTED', message: 'Download cancelled.', retryable: true });
+  const promise = (async (): Promise<ProjectDetail> => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_URL}/projects/import`, {
+        ...json('POST', { ...source, settings: opts.settings, name: opts.name?.trim() || undefined }),
+        cache: 'no-store',
+        signal: ctrl.signal,
+      });
+    } catch {
+      throw ctrl.signal.aborted ? cancelled() : unreachableError();
+    }
+    if (!res.ok) throw errorFromResponse(res.status, await res.text().catch(() => ''));
+    if (!res.body) throw badResponse(res.status);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        buf += decoder.decode(value, { stream: !done });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let event: ImportEvent;
+          try {
+            event = JSON.parse(line) as ImportEvent;
+          } catch {
+            throw badResponse(res.status);
+          }
+          if (event.type === 'progress') opts.onProgress?.(event);
+          else if (event.type === 'done') return event.project;
+          else if (event.type === 'error') throw new ApiError(event.error, res.status);
+        }
+        if (done) break;
+      }
+    } catch (err) {
+      if (ctrl.signal.aborted) throw cancelled();
+      if (err instanceof ApiError) throw err;
+      throw unreachableError(); // the connection dropped mid-download
+    }
+    throw new ApiError({ code: 'BAD_RESPONSE', message: 'The download stopped before it finished.', retryable: true }, res.status);
+  })();
+  return { promise, abort: () => ctrl.abort() };
 }

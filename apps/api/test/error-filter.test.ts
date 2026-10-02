@@ -44,6 +44,15 @@ describe('UserErrorFilter', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it('answers a cancelled request quietly and maps library download failures', () => {
+    expect(send(new AppError('ABORTED', 'The request was cancelled.'))).toMatchObject({ status: 499 });
+    expect(logError).not.toHaveBeenCalled();
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(send(new AppError('LIBRARY_UNAVAILABLE', 'x')).status).toBe(502);
+    expect(send(new AppError('DOWNLOAD_FAILED', 'x')).status).toBe(502);
+    expect(send(new AppError('FILE_TOO_LARGE', 'x', { retryable: false })).status).toBe(413);
+  });
+
   it.each([
     ['NOT_FOUND', 404],
     ['BAD_REQUEST', 400],

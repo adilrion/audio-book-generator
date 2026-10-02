@@ -42,6 +42,7 @@ book.pdf  ──►  audiobook.mp4   1920×1080 H.264 + AAC, highlighted pages, 
 - [Troubleshooting](#troubleshooting)
 - [Publishing to YouTube and social media](#publishing-to-youtube-and-social-media)
 - [Bangla audiobooks (বাংলা)](#bangla-audiobooks-বাংলা)
+- [Books from the internet](#books-from-the-internet)
 - [Power modes (heat, fan noise and battery)](#power-modes-heat-fan-noise-and-battery)
 - [Performance tuning for a 16 GB Mac](#performance-tuning-for-a-16-gb-mac)
 - [Extending](#extending)
@@ -66,6 +67,12 @@ Deeper design notes are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Chapter detection in a fixed order:** PDF outline, then textual patterns (`Chapter 3`, `PART ONE`,
   `Prologue`, and bare chapter labels set in body text), then heading font sizes, then the local LLM
   (only for ambiguous structure), then about 12-page sections as a fallback.
+- **Books straight from the internet.** Search the [Internet Archive](https://archive.org)'s
+  millions of scanned books from the New audiobook page — English classics, and Tagore, Bankim,
+  Sarat Chandra and other Bangla classics — and turn one into an audiobook without downloading it
+  yourself. Books labelled public domain or CC BY / BY-SA are shown by default, each with its
+  rights label. Any PDF link works too (Google Drive and Dropbox share links are converted). See
+  [Books from the internet](#books-from-the-internet).
 - **English and Bangla.** Bangla (বাংলা) books are narrated by Piper's Bangladeshi voice
   `bn_BD-google-medium` (16 speakers). Bangla PDFs with a broken text layer (legacy Bijoy fonts,
   Microsoft Word exports, conjuncts that do not map to Unicode) are read with Tesseract's Bangla OCR
@@ -539,8 +546,10 @@ audiobook and <kbd>/</kbd> in the library to search.
   *In progress*, *Needs attention* (failed, or waiting for a chapter review) and *Completed*, or
   search by title and file name. A banner appears when a required dependency is missing (from
   `GET /system/health`).
-- **New audiobook** (`/new`): drag and drop a PDF. The page shows its cover, title, author, page
-  count, estimated word count and narration length, and warns about scanned PDFs. The settings
+- **New audiobook** (`/new`): drag and drop a PDF, pick a book in the **Online library** tab, or
+  paste a PDF link in **Paste a link** (see [Books from the internet](#books-from-the-internet)).
+  The page shows its cover, title, author, page count, estimated word count and narration length,
+  and warns about scanned PDFs. The settings
   are pre-filled with the server defaults: output (video or audio only), voice engine, voice,
   language and speed, video format (16:9, 9:16, 1:1), camera animation, page size (comfortable,
   full width, fit text), highlight unit (sentence, paragraph, word, cursor), style and colour,
@@ -699,6 +708,7 @@ enqueues a job.
 | Method & path | Body / query | Returns |
 |---|---|---|
 | `POST /projects` | multipart: `file` (PDF), `settings` (JSON string of partial `ProjectSettings`), `name` (default: the PDF's title or file name) | `ProjectDetail`. Checks the PDF header, deduplicates by SHA-256 and inspects pages, words and scan status. Does not start processing. `400` for a non-PDF, invalid settings or a scan with OCR off; `422` for an encrypted or unreadable PDF; `413` above `MAX_UPLOAD_MB`. |
+| `POST /projects/import` | JSON `{ source: "archive", id, file? }` (a library book; `file` picks one of its PDFs, default the best) or `{ source: "url", url }` (any PDF link), plus optional `settings` (partial `ProjectSettings`) and `name` | The API downloads the PDF and creates the project exactly like `POST /projects`. Problems found before the download starts are normal errors: `400` for a bad or local-network link, a web page instead of a PDF, or invalid settings; `404` for an unknown book; `413` above `MAX_UPLOAD_MB`; `502` when the website or archive.org fails. After that the answer is `200` NDJSON (`application/x-ndjson`): `{"type":"progress","phase":"downloading","received","total"}` lines, `{"type":"progress","phase":"inspecting"}`, then `{"type":"done","project":ProjectDetail}` or `{"type":"error","error":{code,message,hint}}`. Closing the request cancels the download. |
 | `GET /projects` | | `ProjectSummary[]` (newest first, up to 200) |
 | `GET /projects/:id` | | `ProjectDetail`: settings, document, snapshot, steps, outputs, chapters |
 | `PATCH /projects/:id/settings` | partial `ProjectSettings` JSON (`text.chapterRange: null` clears the range) | `ProjectDetail`. `409` while processing. |
@@ -722,6 +732,8 @@ enqueues a job.
 | `DELETE /projects/:id/publish/thumbnail` | | `PublishState` |
 | `DELETE /projects/:id/cache` | | `{ freedBytes }`: clean the project cache (never deletes final outputs). `409` while processing. |
 | `DELETE /projects/:id` | `?deleteOutputs=true` (default `false`) | `{ ok: true, outputsKept }`. Outputs are kept unless requested. The upload is removed only if no other project uses the same PDF. `409` while processing. |
+| `GET /library/search` | `?q=` (title or author; empty = a shelf of classics), `language=any\|en\|bn`, `free=true\|false` (default `true`: only books labelled public domain, CC0, CC BY or CC BY-SA), `page=1…100` | `LibrarySearchResult` `{total, page, pageSize: 24, books: [{source: "archive", id, title, author, year, language, pages, downloads, coverUrl, pageUrl, rights: "public_domain"\|"open"\|"restricted"\|"unknown", license}]}`, most downloaded first. `502` when archive.org does not answer (cached for 10 min when it does). |
+| `GET /library/archive/:id` | | `LibraryBookDetail`: the book plus `files: [{name, size, format}]`, its downloadable PDFs with a text layer first (borrow-only books have none) |
 | `GET /system/health` | `?fresh=1` bypasses the 15 s cache | `HealthReport` `{ok, checks[{name, ok, required, message, fix?}]}`: the doctor's checks plus DB and Redis |
 | `GET /system/voices` | `?engine=kokoro\|piper\|say` (default `TTS_ENGINE`) | `{engine, available, message, voices: VoiceInfo[]}`; `400` for an unknown engine |
 | `GET /system/performance` | | `PerformanceStatus` `{prefs: {mode, quietOnBattery, paused}, plan (what runs now, e.g. quiet because on battery), modes (labels, measured speeds)}` |
@@ -743,8 +755,9 @@ server log:
 ```
 
 Status codes: `400` bad input, `404` not found, `409` conflict or not ready, `410` uploaded PDF
-missing, `413` upload too large, `422` unreadable/encrypted/empty/scanned PDF, `503` database,
-Redis or Python unavailable, `507` not enough disk space, `500` other.
+missing, `413` upload too large, `422` unreadable/encrypted/empty/scanned PDF, `502` a website or
+archive.org failed during an import, `503` database, Redis or Python unavailable, `507` not enough
+disk space, `500` other.
 
 ```bash
 # A complete session with curl
@@ -912,6 +925,16 @@ printed text exactly and every chapter was still found. Typical Tesseract slips 
 read as `“T` and a missing space between two words. Turn on the local LLM to repair the worst
 sentences. The API refuses an obviously scanned PDF if `text.ocr` is `off`.
 
+#### Online library: "The online library (archive.org) did not answer."
+archive.org is sometimes slow or briefly down. The API waits 20 s, then gives up; press **Try
+again**. Results that did load are cached for 10 minutes. Behind a proxy or firewall, check that
+`https://archive.org` opens in your browser.
+
+#### Paste a link: "This link opens a web page, not a PDF file."
+The link is the page *about* the PDF. Open it in your browser, right-click the download button and
+choose **Copy Link Address**, then paste that. Google Drive shows a virus-scan page instead of the
+file for files over ~100 MB; download those yourself and use **Upload**.
+
 #### Password-protected PDF
 The API rejects encrypted PDFs (`PDF_PASSWORD`, "Remove the password and upload it again"). Either
 use the CLI with `--password <pw>`, or remove the password from a PDF you own, for example with qpdf:
@@ -1068,6 +1091,44 @@ mostly garbled fails with `PDF_TEXT_GARBLED` instead of narrating garbage.
 
 Not done for Bangla: the local LLM is not asked to repair Bangla text, there is no pronunciation
 lexicon, and macOS has no built-in Bangla `say` voice.
+
+---
+
+## Books from the internet
+
+The **New audiobook** page has three ways to bring in a book: **Upload**, **Online library** and
+**Paste a link**. For the last two the API downloads the PDF itself (needs an internet
+connection), stores it like an upload and inspects it; you then choose a voice and start as usual.
+
+**Online library.** Searches the [Internet Archive](https://archive.org) (archive.org) — millions of
+scanned books with a text layer, and a large Bangla collection — by title, author or subject. An
+empty search shows a shelf of classics: English library scans marked "not in copyright", or Bangla
+authors whose works are out of copyright (Tagore, Bankim Chandra, Sarat Chandra, Sukumar Ray,
+Bibhutibhushan, Begum Rokeya …). Filter by language (English, বাংলা) and switch **Free to use
+only** off to see every downloadable book. Each book shows its rights label:
+
+| Label | Meaning |
+|---|---|
+| Public domain (green) | Marked "not in copyright", public-domain mark or CC0 |
+| CC BY / CC BY-SA (blue) | Free to adapt and publish with credit to the author |
+| CC …-NC / …-ND (amber) | NonCommercial or NoDerivatives: an audiobook, especially a monetised one, may not be allowed |
+| Rights unknown (grey) | The page says nothing — check before publishing |
+
+The labels are set by whoever uploaded the scan and are sometimes wrong (a modern bestseller
+marked "public domain"), so check before you publish. Multi-volume items ask which PDF to use;
+copies of the same scan (`book.pdf` vs. `book_text.pdf`, `book_bw.pdf`) are merged. Picking a
+Bangla book switches the narration to Bangla (and the English one back to English). Borrow-only
+(lending library) books cannot be downloaded and are not listed.
+
+**Paste a link.** Any `http(s)` link that downloads a PDF. Google Drive (`/file/d/<id>/view`) and
+Dropbox (`?dl=0`) share links are turned into download links, and an `archive.org/details/<id>` book
+page is treated like a library book. A link that opens a web page is refused with a hint to copy
+the PDF's own download link instead. The download is limited to `MAX_UPLOAD_MB`, can be cancelled
+from the page, and is removed again if it fails.
+
+For safety the API never downloads from this Mac or the local network (`localhost`, `10.x`,
+`192.168.x`, link-local and other private addresses, in any spelling). This is checked on the
+address it actually connects to and again after every redirect.
 
 ---
 
@@ -1315,6 +1376,8 @@ interfaces.
 This application is a processing tool. **Only process and distribute books you have the legal right
 to use**: your own works, public-domain books, or books whose license allows it. The web UI shows this
 reminder. Nothing here removes DRM or copy protection, and encrypted PDFs need their password.
+The online library's rights labels come from each book's uploader and are not a legal check
+(see [Books from the internet](#books-from-the-internet)).
 
 ---
 
@@ -1339,11 +1402,12 @@ Also deliberately limited in V1:
 
 ```text
 apps/
-  api/                 NestJS API (src/main.ts) + BullMQ worker (src/worker.ts), Prisma schema & migrations
+  api/                 NestJS API (src/main.ts) + BullMQ worker (src/worker.ts), Prisma schema & migrations;
+                       src/library/ = online library (archive.org) + safe PDF link downloads
   cli/                 `audiobook` CLI (create | inspect | voices | doctor | sample)
   web/                 Next.js dashboard
 packages/
-  types/               domain model shared by all apps (settings, status, pdf, analysis, audio, timeline, api)
+  types/               domain model shared by all apps (settings, status, pdf, analysis, audio, timeline, api, library)
   config/              .env loading + validation (zod), storage paths
   shared/              AppError, hashing, atomic fs, semaphore, logger, formatting
   pipeline/            PipelineRunner, text/, llm/, tts/, audio/, timeline/, python/ bridge, health, maintenance

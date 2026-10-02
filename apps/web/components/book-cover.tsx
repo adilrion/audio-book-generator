@@ -11,14 +11,18 @@ function hueOf(seed: string) {
 }
 
 /**
- * A book cover: the PDF's first page (rendered on demand by the API and cached), with a
- * generated typographic cover while there is no page image (no project yet, or rendering failed).
+ * A book cover: the PDF's first page (rendered on demand by the API and cached), else `src` (an
+ * online library's cover), else a generated typographic cover (no project yet, or loading failed).
  * Set the size with `className` (e.g. `w-24`); the aspect ratio is a trade paperback's.
  */
-export function BookCover({ projectId, title, className, size = 'md' }: { projectId?: string; title: string; className?: string; size?: 'xs' | 'md' }) {
-  const [state, setState] = useState<'loading' | 'loaded' | 'failed'>(projectId ? 'loading' : 'failed');
-  useEffect(() => setState(projectId ? 'loading' : 'failed'), [projectId]);
-  const hue = hueOf(projectId ?? title);
+export function BookCover({ projectId, src, title, className, size = 'md' }: { projectId?: string; src?: string; title: string; className?: string; size?: 'xs' | 'md' }) {
+  const page = projectId ? pageImageUrl(projectId, 1) : undefined;
+  const [fallback, setFallback] = useState(false);
+  useEffect(() => setFallback(false), [page, src]);
+  const image = page && !(fallback && src) ? page : src;
+  const [state, setState] = useState<'loading' | 'loaded' | 'failed'>(image ? 'loading' : 'failed');
+  useEffect(() => setState(image ? 'loading' : 'failed'), [image]);
+  const hue = hueOf(projectId ?? src ?? title);
   const generated = state === 'failed';
   const xs = size === 'xs';
 
@@ -47,10 +51,10 @@ export function BookCover({ projectId, title, className, size = 'md' }: { projec
           )}
         </div>
       )}
-      {projectId && !generated && (
-        // eslint-disable-next-line @next/next/no-img-element -- page renders come from the local API
+      {image && !generated && (
+        // eslint-disable-next-line @next/next/no-img-element -- page renders come from the local API, covers from the library
         <img
-          src={pageImageUrl(projectId, 1)}
+          src={image}
           alt=""
           loading="lazy"
           decoding="async"
@@ -59,7 +63,7 @@ export function BookCover({ projectId, title, className, size = 'md' }: { projec
             if (el?.complete && el.naturalWidth > 0) setState((s) => (s === 'loading' ? 'loaded' : s));
           }}
           onLoad={() => setState('loaded')}
-          onError={() => setState('failed')}
+          onError={() => (image === page && src ? setFallback(true) : setState('failed'))}
           className={cn('absolute inset-0 size-full object-cover object-top transition-opacity duration-500 select-none', state === 'loaded' ? 'opacity-100' : 'opacity-0')}
         />
       )}

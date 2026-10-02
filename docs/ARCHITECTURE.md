@@ -645,6 +645,7 @@ ANALYZING, GENERATING_AUDIO, PREPARING_VIDEO, RENDERING, COMPLETED, FAILED, CANC
 | Where | How memory stays bounded |
 |---|---|
 | Upload | Multer streams to `storage/uploads/.incoming/`; hashing is streamed |
+| Library / link import | `POST /projects/import` streams the download to the same `.incoming/` folder (`library/download.ts`, capped at `MAX_UPLOAD_MB`), then hands it to the upload path |
 | Extraction | One page at a time, written to `pages.jsonl` immediately |
 | Analysis | The one stage that holds the whole book's text: compact line and word records in the Node process, read back from `pages.jsonl`. No images or audio are involved |
 | TTS | Sentence by sentence into a FLAC on disk. Each TTS process holds one Kokoro model; measured peak RSS ≈ 0.7 GB per process. `MAX_CONCURRENT_TTS` (default 2) bounds the number of processes, and threads are split between them (`KOKORO_THREADS`) |

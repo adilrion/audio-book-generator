@@ -1,30 +1,47 @@
 'use client';
 
-import { DEFAULT_SETTINGS, type ProjectDetail, type ProjectSettings } from '@app/types';
-import { CircleCheck, Headphones, ListTree, LoaderCircle, Play, ScanText, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { DEFAULT_SETTINGS, type LibraryBook, type LibraryBookDetail, type LibraryFile, type ProjectDetail, type ProjectSettings } from '@app/types';
+import { CircleCheck, FileUp, Headphones, Languages, LibraryBig, Link2, ListTree, LoaderCircle, Play, ScanText, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
 import { BookCover } from '@/components/book-cover';
+import { BookLibrary } from '@/components/book-library';
 import { HealthBanner } from '@/components/health-banner';
+import { LinkImport } from '@/components/link-import';
 import { PageHeader } from '@/components/page-header';
 import { FormSection, LookPreview, SettingsForm, validateSettings } from '@/components/settings-form';
 import { isPdfFile, UploadDropzone } from '@/components/upload-dropzone';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useApi } from '@/hooks/use-api';
-import { ApiError, api, toApiError, type UploadHandle, uploadProject } from '@/lib/api';
+import { ApiError, api, type ImportSource, importProject, toApiError, type UploadHandle, uploadProject } from '@/lib/api';
 import { estimateNarrationSec, formatBytes, formatDuration, formatNumber } from '@/lib/format';
+import { displayAuthor, linkLabel, rightsBadge } from '@/lib/library';
 import { cloneSettings, diffSettings, isEmptyPatch, settingsForUpload } from '@/lib/settings';
 import { cn } from '@/lib/utils';
-import { ENGINE_LABELS } from '@/lib/voices';
+import { applyLanguage, ENGINE_LABELS } from '@/lib/voices';
+
+/** What is being added: a file from this Mac, or a PDF the API downloads (a library book or a link). */
+interface Source {
+  kind: 'file' | 'library' | 'link';
+  name: string;
+  size?: number;
+  book?: LibraryBook;
+}
 
 type Upload =
   | { state: 'idle' }
-  | { state: 'uploading'; file: File; progress: number }
-  | { state: 'done'; file: File; project: ProjectDetail }
-  | { state: 'error'; file: File; error: ApiError };
+  /** `progress` 0–1; a download of unknown size only knows `received` bytes. */
+  | { state: 'uploading'; file: Source; phase: 'upload' | 'download' | 'inspect'; progress: number; received?: number }
+  | { state: 'done'; file: Source; project: ProjectDetail }
+  | { state: 'error'; file: Source; error: ApiError };
+
+type SourceTab = 'upload' | 'library' | 'link';
+
+const RETRY_LABEL: Record<Source['kind'], string> = { file: 'Choose another file', library: 'Choose another book', link: 'Try another link' };
 
 function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -35,39 +52,56 @@ function Stat({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function progressText(u: Extract<Upload, { state: 'uploading' }>, inspecting: boolean): string {
+  if (inspecting) return 'Inspecting PDF — counting pages and words…';
+  if (u.phase === 'upload') return `Uploading… ${Math.round(u.progress * 100)}%`;
+  const from = u.file.kind === 'library' ? 'archive.org' : 'the link';
+  if (!u.received) return `Connecting to ${from}…`;
+  return u.file.size ? `Downloading from ${from}… ${Math.round(u.progress * 100)}% of ${formatBytes(u.file.size)}` : `Downloading from ${from}… ${formatBytes(u.received)}`;
+}
+
 function FileCard({ upload, speed, onReset }: { upload: Exclude<Upload, { state: 'idle' }>; speed: number; onReset: () => void }) {
   const f = upload.file;
   const doc = upload.state === 'done' ? upload.project.document : undefined;
-  const inspecting = upload.state === 'uploading' && upload.progress >= 1;
+  const title = (upload.state === 'done' && upload.project.name) || doc?.title || f.name;
+  const inspecting = upload.state === 'uploading' && (upload.phase === 'inspect' || (upload.phase === 'upload' && upload.progress >= 1));
+  // A download can be stopped; an upload cannot once sent (the API would create the project anyway).
+  const cancellable = upload.state === 'uploading' && upload.phase === 'download';
+  const size = doc?.fileSize ?? f.size;
+  const rights = f.book ? rightsBadge(f.book) : undefined;
+  // The library's catalogue name reads better than a scan's PDF metadata ("Tagore, Rabindranath, 1861-1941; Royal India…").
+  const author = (f.book && displayAuthor(f.book.author)) || doc?.author;
   return (
     <div className="grid gap-5">
       <div className="flex items-start gap-4">
-        <BookCover projectId={upload.state === 'done' ? upload.project.id : undefined} title={doc?.title || f.name.replace(/\.pdf$/i, '')} className="w-16" />
+        <BookCover projectId={upload.state === 'done' ? upload.project.id : undefined} src={f.book?.coverUrl} title={title.replace(/\.pdf$/i, '')} className="w-16" />
         <div className="grid min-w-0 flex-1 gap-1 pt-0.5">
-          <p className="truncate font-serif text-lg leading-snug font-medium" title={doc?.title || f.name}>
-            {doc?.title || f.name}
+          <p className="truncate font-serif text-lg leading-snug font-medium" title={title}>
+            {title}
           </p>
           <p className="truncate text-sm text-muted-foreground tabular">
-            {doc?.author ? `${doc.author} · ` : ''}
-            {doc?.title ? `${f.name} · ` : ''}
-            {formatBytes(f.size)}
+            {author ? `${author} · ` : ''}
+            {upload.state === 'done' && upload.project.fileName !== title ? `${upload.project.fileName} · ` : ''}
+            {size ? formatBytes(size) : f.kind === 'library' ? 'Internet Archive' : 'From a link'}
           </p>
           {upload.state === 'uploading' && (
             <div className="mt-2 grid gap-1.5">
-              <Progress value={upload.progress * 100} live={inspecting} className="h-1.5" />
+              {(upload.phase !== 'download' || f.size) && <Progress value={inspecting ? 100 : upload.progress * 100} live={inspecting} className="h-1.5" />}
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
                 <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
-                {inspecting ? 'Inspecting PDF — counting pages and words…' : `Uploading… ${Math.round(upload.progress * 100)}%`}
+                {progressText(upload, inspecting)}
               </p>
             </div>
           )}
         </div>
-        <Button variant="ghost" size="sm" onClick={onReset} disabled={upload.state === 'uploading'} className="shrink-0 text-muted-foreground">
-          <X aria-hidden /> <span className="hidden sm:inline">Replace</span>
+        <Button variant="ghost" size="sm" onClick={onReset} disabled={upload.state === 'uploading' && !cancellable} className="shrink-0 text-muted-foreground">
+          <X aria-hidden /> <span className="hidden sm:inline">{cancellable ? 'Cancel' : 'Replace'}</span>
         </Button>
       </div>
 
-      {upload.state === 'error' && <ApiErrorAlert error={upload.error} title="Upload failed" onRetry={onReset} retryLabel="Choose another file" />}
+      {upload.state === 'error' && (
+        <ApiErrorAlert error={upload.error} title={f.kind === 'file' ? 'Upload failed' : 'Download failed'} onRetry={onReset} retryLabel={RETRY_LABEL[f.kind]} />
+      )}
 
       {doc && (
         <>
@@ -101,6 +135,11 @@ function FileCard({ upload, speed, onReset }: { upload: Exclude<Upload, { state:
                 <ShieldCheck aria-hidden /> Encrypted PDF (opened without a password)
               </Badge>
             )}
+            {rights && (
+              <Badge variant={rights.variant} title={rights.help}>
+                {rights.label}
+              </Badge>
+            )}
           </div>
         </>
       )}
@@ -124,11 +163,16 @@ export function NewProject() {
   const withReview = (s: ProjectSettings) => ({ ...s, text: { ...s.text, reviewChapters: true } });
   const [settings, setSettings] = useState<ProjectSettings>(() => withReview(cloneSettings(DEFAULT_SETTINGS)));
   const touched = useRef(false);
+  // A library pick lands after an await; read the settings as they are then, not as they were at the click.
+  const latest = useRef(settings);
+  latest.current = settings;
   const [upload, setUpload] = useState<Upload>({ state: 'idle' });
   const handle = useRef<UploadHandle | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<ApiError>();
   const [localError, setLocalError] = useState<string>();
+  const [tab, setTab] = useState<SourceTab>('upload');
+  const [notice, setNotice] = useState<string>();
 
   // Server defaults (engine/voice come from the API's .env) — unless the user already changed something.
   useEffect(() => {
@@ -139,9 +183,24 @@ export function NewProject() {
 
   const maxMb = config.data?.maxUploadMb;
 
+  /** Follow an upload or download until the project exists (or it fails). */
+  const track = (h: UploadHandle, from: Source) => {
+    handle.current = h;
+    h.promise
+      .then((project) => setUpload({ state: 'done', file: from, project }))
+      .catch((err) => {
+        if ((err as ApiError)?.code === 'ABORTED') return;
+        setUpload({ state: 'error', file: from, error: toApiError(err) });
+      })
+      .finally(() => {
+        if (handle.current === h) handle.current = null;
+      });
+  };
+
   const onFile = (file: File) => {
     setLocalError(undefined);
     setStartError(undefined);
+    setNotice(undefined);
     if (!isPdfFile(file)) {
       setLocalError(`“${file.name}” is not a PDF. Choose a .pdf file.`);
       return;
@@ -154,21 +213,55 @@ export function NewProject() {
       setLocalError('This file is empty.');
       return;
     }
-    setUpload({ state: 'uploading', file, progress: 0 });
-    const h = uploadProject(file, {
-      settings: settingsForUpload(settings),
-      onProgress: (p) => setUpload((u) => (u.state === 'uploading' && u.file === file ? { ...u, progress: p } : u)),
-    });
-    handle.current = h;
-    h.promise
-      .then((project) => setUpload({ state: 'done', file, project }))
-      .catch((err) => {
-        if ((err as ApiError)?.code === 'ABORTED') return;
-        setUpload({ state: 'error', file, error: toApiError(err) });
-      })
-      .finally(() => {
-        if (handle.current === h) handle.current = null;
-      });
+    const from: Source = { kind: 'file', name: file.name, size: file.size };
+    setUpload({ state: 'uploading', file: from, phase: 'upload', progress: 0 });
+    track(
+      uploadProject(file, {
+        settings: settingsForUpload(settings),
+        onProgress: (p) => setUpload((u) => (u.state === 'uploading' && u.file === from ? { ...u, progress: p } : u)),
+      }),
+      from,
+    );
+  };
+
+  /** The API downloads the PDF (library book or link) and creates the project, like an upload. */
+  const onImport = (source: ImportSource, from: Source, withSettings: ProjectSettings) => {
+    setLocalError(undefined);
+    setStartError(undefined);
+    setUpload({ state: 'uploading', file: from, phase: 'download', progress: 0 });
+    track(
+      importProject(source, {
+        settings: settingsForUpload(withSettings),
+        onProgress: (e) =>
+          setUpload((u) => {
+            if (u.state !== 'uploading' || u.file !== from) return u;
+            if (e.phase === 'inspecting') return { ...u, phase: 'inspect', progress: 1 };
+            const total = e.total ?? from.size;
+            return { ...u, received: e.received, progress: total ? Math.min(1, e.received / total) : 0 };
+          }),
+      }),
+      from,
+    );
+  };
+
+  const onBook = (book: LibraryBookDetail, file: LibraryFile) => {
+    // Narrate a Bangla book in Bangla (and an English one in English) unless the user picks otherwise.
+    let next = latest.current;
+    const lang = book.language === 'bn' || book.language === 'en' ? book.language : undefined;
+    if (lang && lang !== next.language) {
+      next = cloneSettings(next);
+      applyLanguage(next, lang, config.data);
+      touched.current = true;
+      setSettings(next);
+      setNotice(`Narration language set to ${lang === 'bn' ? 'Bangla' : 'English'} to match this book.`);
+    } else setNotice(undefined);
+    const name = book.files.length > 1 ? `${book.title} — ${file.name}` : book.title;
+    onImport({ source: 'archive', id: book.id, file: file.name }, { kind: 'library', name, size: file.size || undefined, book }, next);
+  };
+
+  const onLink = (url: string) => {
+    setNotice(undefined);
+    onImport({ source: 'url', url }, { kind: 'link', name: linkLabel(url) }, latest.current);
   };
 
   const reset = () => {
@@ -177,6 +270,7 @@ export function NewProject() {
     if (upload.state === 'done') void api.deleteProject(upload.project.id, false).catch(() => undefined);
     setUpload({ state: 'idle' });
     setStartError(undefined);
+    setNotice(undefined);
   };
 
   const invalid = validateSettings(settings);
@@ -200,11 +294,11 @@ export function NewProject() {
 
   const hint =
     upload.state === 'idle'
-      ? 'Upload a PDF to continue.'
+      ? 'Choose a PDF to continue.'
       : upload.state === 'uploading'
-        ? 'Uploading… you can keep configuring meanwhile.'
+        ? `${upload.phase === 'download' ? 'Downloading' : 'Uploading'}… you can keep configuring meanwhile.`
         : upload.state === 'error'
-          ? 'Fix the upload problem to continue.'
+          ? `Fix the ${upload.file.kind === 'file' ? 'upload' : 'download'} problem to continue.`
           : invalid
             ? invalid
             : settings.text.reviewChapters
@@ -226,15 +320,48 @@ export function NewProject() {
       <PageHeader
         back={{ href: '/', label: 'Library' }}
         title="New audiobook"
-        description="Upload a PDF, choose a voice and a look, then start. Processing runs in the background — you can close this tab."
+        description="Upload a PDF or pick a book from the online library, choose a voice and a look, then start. Processing runs in the background — you can close this tab."
       />
 
       <HealthBanner />
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-8">
         <div className="grid min-w-0 gap-6">
-          <FormSection step={1} title="Upload your PDF" description="Your PDF stays on this Mac. The same file is only stored once.">
-            {upload.state === 'idle' ? <UploadDropzone onFile={onFile} maxMb={maxMb} /> : <FileCard upload={upload} speed={settings.tts.speed} onReset={reset} />}
+          <FormSection
+            step={1}
+            title="Choose your book"
+            description="Upload a PDF from this Mac, find a free book online, or paste a link to a PDF. Books are kept on this Mac, and the same file is only stored once."
+          >
+            {/* Stays mounted while a book is loading, so “Choose another book” returns to the same search. */}
+            <Tabs value={tab} onValueChange={(v) => setTab(v as SourceTab)} className={cn(upload.state !== 'idle' && 'hidden')}>
+              <TabsList className="w-full sm:w-fit">
+                <TabsTrigger value="upload">
+                  <FileUp aria-hidden /> Upload
+                </TabsTrigger>
+                <TabsTrigger value="library">
+                  <LibraryBig aria-hidden /> Online library
+                </TabsTrigger>
+                <TabsTrigger value="link">
+                  <Link2 aria-hidden /> <span className="sm:hidden">Link</span>
+                  <span className="hidden sm:inline">Paste a link</span>
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="upload">
+                <UploadDropzone onFile={onFile} maxMb={maxMb} />
+              </TabsContent>
+              <TabsContent value="library">
+                <BookLibrary onPick={onBook} initialLanguage={settings.language === 'bn' ? 'bn' : 'any'} />
+              </TabsContent>
+              <TabsContent value="link">
+                <LinkImport onLink={onLink} />
+              </TabsContent>
+            </Tabs>
+            {upload.state !== 'idle' && <FileCard upload={upload} speed={settings.tts.speed} onReset={reset} />}
+            {notice && upload.state !== 'idle' && (
+              <p className="-mt-2 flex items-center gap-1.5 text-sm text-muted-foreground" aria-live="polite">
+                <Languages className="size-4 shrink-0" aria-hidden /> {notice}
+              </p>
+            )}
             {localError && (
               <p className="-mt-2 flex items-center gap-1.5 text-sm text-destructive" role="alert">
                 <TriangleAlert className="size-4 shrink-0" aria-hidden /> {localError}
@@ -274,7 +401,9 @@ export function NewProject() {
               )}
             </div>
             <dl className="divide-y border-y">
-              <SummaryRow label="Book">{doc?.title || (upload.state !== 'idle' ? upload.file.name : <span className="font-normal text-muted-foreground">No file yet</span>)}</SummaryRow>
+              <SummaryRow label="Book">
+                {upload.state === 'done' ? upload.project.name : upload.state !== 'idle' ? upload.file.name : <span className="font-normal text-muted-foreground">No book yet</span>}
+              </SummaryRow>
               <SummaryRow label="Narration">
                 {doc ? `~${formatDuration(estimateNarrationSec(doc.estimatedWords, settings.tts.speed))}` : <span className="font-normal text-muted-foreground">—</span>}
               </SummaryRow>

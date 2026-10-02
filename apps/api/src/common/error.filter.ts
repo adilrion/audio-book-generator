@@ -24,6 +24,10 @@ const STATUS: Record<string, number> = {
   PYTHON_MISSING: 503,
   DISK_SPACE: 507,
   DISK_FULL: 507, // ENOSPC mapped by toAppError()
+  FILE_TOO_LARGE: 413, // a library download above MAX_UPLOAD_MB
+  DOWNLOAD_FAILED: 502, // the website behind a pasted link failed
+  LIBRARY_UNAVAILABLE: 502, // archive.org did not answer
+  ABORTED: 499, // the client closed the request (e.g. a search replaced by the next keystroke)
 };
 
 /** Errors from Express middleware (body-parser via http-errors) carry a safe 4xx status + message. */
@@ -66,7 +70,7 @@ export class UserErrorFilter implements ExceptionFilter {
     const e = toUserError(exception);
     const status = STATUS[e.code] ?? 500;
     if (status >= 500) this.log.error(`${e.code}: ${describeError(exception)}`);
-    else this.log.warn(`${e.code}: ${e.message}`);
+    else if (e.code !== 'ABORTED') this.log.warn(`${e.code}: ${e.message}`);
     res.status(status).json({ error: e.toUser() });
   }
 }

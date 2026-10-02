@@ -46,7 +46,8 @@ export class ProjectsService {
   }
 
   // ── create ───────────────────────────────────────────────
-  async create(file: Express.Multer.File, rawSettings?: string, name?: string): Promise<ProjectDetail> {
+  /** `file` is a multer upload, or a PDF the online library downloaded into the same temp folder. */
+  async create(file: Pick<Express.Multer.File, 'path' | 'originalname'>, rawSettings?: string | object, name?: string): Promise<ProjectDetail> {
     if (!file) throw badRequest('Please choose a PDF file to upload.');
     let hash = '';
     let moved: string | undefined; // PDF this request moved into storage/uploads, until a Document owns it
@@ -114,7 +115,8 @@ export class ProjectsService {
     if (!owner) await fsp.rm(file, { force: true }).catch(() => undefined);
   }
 
-  private parseSettings(raw?: string | object, base?: ProjectSettings): ProjectSettings {
+  /** Validated settings merged over the defaults (or `base`); throws BAD_REQUEST with the problems. */
+  parseSettings(raw?: string | object, base?: ProjectSettings): ProjectSettings {
     let input: unknown = raw ?? {};
     if (typeof raw === 'string') {
       try {

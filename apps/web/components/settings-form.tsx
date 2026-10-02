@@ -52,7 +52,7 @@ import { highlightStyleCss, tintStyleCss } from '@/lib/highlight';
 import { splitHint } from '@/lib/hint';
 import { cloneSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils';
-import { ENGINE_LABELS, defaultVoiceFor, groupVoices, pickVoice, voiceMeta } from '@/lib/voices';
+import { ENGINE_LABELS, applyLanguage, defaultVoiceFor, groupVoices, pickVoice, voiceMeta } from '@/lib/voices';
 
 // ─────────────────────────────── options ───────────────────────────────
 
@@ -560,15 +560,7 @@ export function SettingsForm({ value, onChange, config, disabled, document, chap
         <Field label="Language" htmlFor={ids.lang} className="sm:max-w-md">
           <Select
             value={value.language}
-            onValueChange={(l) =>
-              update((d) => {
-                d.language = l as ProjectSettings['language'];
-                // Each language has its own voices: Bangla is read by Piper's Bangla voice, not Kokoro.
-                const lang = config?.languageDefaults?.[d.language];
-                if (lang && !lang.engines.includes(d.tts.engine)) d.tts.engine = lang.engine;
-                d.tts.voice = defaultVoiceFor(config, d.tts.engine, d.language) ?? '';
-              })
-            }
+            onValueChange={(l) => update((d) => applyLanguage(d, l as ProjectSettings['language'], config))}
           >
             <SelectTrigger id={ids.lang} className="h-10">
               <SelectValue />
