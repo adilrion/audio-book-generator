@@ -1,5 +1,5 @@
 import { AppError } from '@app/shared';
-import { type LanguageCode, SHORT_MAX_TAGS, SHORT_SCRIPT_MAX_CHARS, type ShortScriptStyle, estimateShortSec, fitTags, suggestShortTags } from '@app/types';
+import { type LanguageCode, SHORT_MAX_TAGS, type ShortScriptStyle, cleanHashtags, cleanScript, estimateShortSec, fitTags, shortTargetWords, suggestShortTags } from '@app/types';
 import type { LLMProvider } from '../llm/provider';
 import { cleanText, clip, cleanTitle } from '../publish/generate';
 
@@ -36,52 +36,26 @@ const STYLES: Record<ShortScriptStyle, (book: boolean) => string> = {
 };
 
 /** Words for a target length at the voice's usual pace (a little under, so the short stays inside it). */
-export function targetWords(seconds: number, language: LanguageCode): number {
-  return Math.max(20, Math.round(((language === 'bn' ? 115 : 165) * seconds * 0.92) / 60));
+export const targetWords = shortTargetWords;
+
+// Shared with the browser, which cleans scripts pasted from other AI tools the same way.
+export { cleanHashtags, cleanScript };
+
+/** In a batch: this short's angle, and the titles already written (so it says something new). */
+export interface ShortScriptVariety {
+  angle?: string;
+  avoid?: string[];
 }
 
-/** Remove what a voice must not read: markdown, emojis, hashtags, stage directions, speaker labels. */
-export function cleanScript(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  const text = raw
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((l) =>
-      l
-        .replace(/^\s*(?:[-*•]+|\d+[.)])\s+/, '') // bullets, numbered lists
-        .replace(/[*_`~]+/g, '') // emphasis, before labels: "**Narrator:**"
-        .replace(/^\s*(?:narrator|voice ?over|vo|host|speaker)\s*:\s*/i, '')
-        .replace(/^\s*#{1,6}\s+/, ''),
-    )
-    .filter((l) => !/^\s*[[(].*[\])]\s*$/.test(l)) // whole-line directions: "(upbeat music)", "[Pause]"
-    .join('\n')
-    .replace(/\[[^\]\n]{0,40}\]|\((?:music|pause|beat|sfx|sound)[^)\n]{0,30}\)/gi, '')
-    .replace(/(^|\s)#[\p{L}\p{M}\p{N}_]+/gu, '$1')
-    .replace(/\p{Extended_Pictographic}️?/gu, '')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/ *\n */g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  return clip(cleanText(text, SHORT_SCRIPT_MAX_CHARS), SHORT_SCRIPT_MAX_CHARS);
-}
-
-/** Hashtags without "#", de-duplicated, "Shorts" first. */
-export function cleanHashtags(raw: unknown, extra: string[] = []): string[] {
-  const list = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [];
-  const out: string[] = [];
-  for (const h of ['Shorts', ...list, ...extra]) {
-    const tag = h.replace(/^#+/, '').replace(/[^\p{L}\p{M}\p{N}_]/gu, '').slice(0, 40);
-    if (tag && !out.some((o) => o.toLowerCase() === tag.toLowerCase())) out.push(tag);
-  }
-  return out.slice(0, 8);
-}
-
-function facts(src: ShortScriptSource, language: LanguageCode, seconds: number, style: ShortScriptStyle): string {
+function facts(src: ShortScriptSource, language: LanguageCode, seconds: number, style: ShortScriptStyle, variety: ShortScriptVariety = {}): string {
   const book = src.kind === 'book';
+  const avoid = (variety.avoid ?? []).map((t) => t.trim()).filter(Boolean);
   return [
     book ? `BOOK: ${src.title}${src.author ? ` by ${src.author}` : ''}` : `TOPIC: ${src.topic}`,
     `LENGTH: about ${targetWords(seconds, language)} words (${seconds} seconds when read aloud). Never more than ${targetWords(seconds, language) + 15} words.`,
     `STYLE: ${STYLES[style](book)}`,
+    variety.angle?.trim() ? `ANGLE: focus on ${variety.angle.trim()}.` : '',
+    avoid.length ? `ALREADY MADE in this series — say something clearly different, with a different hook and title:\n${avoid.map((t) => `- ${t}`).join('\n')}` : '',
     language === 'bn'
       ? 'LANGUAGE: write the title, script and description in Bangla (Bengali script). Hashtags may be Bangla or English.'
       : 'LANGUAGE: write everything in English.',
@@ -97,13 +71,13 @@ function facts(src: ShortScriptSource, language: LanguageCode, seconds: number, 
 export async function generateShortScript(
   provider: LLMProvider,
   src: ShortScriptSource,
-  opts: { language: LanguageCode; seconds: number; style: ShortScriptStyle },
+  opts: { language: LanguageCode; seconds: number; style: ShortScriptStyle } & ShortScriptVariety,
   signal?: AbortSignal,
 ): Promise<ShortScriptDraft> {
   const r = await provider.generateJson<{ title?: unknown; script?: unknown; description?: unknown; hashtags?: unknown; tags?: unknown }>(
     {
       system: SYSTEM,
-      prompt: facts(src, opts.language, opts.seconds, opts.style),
+      prompt: facts(src, opts.language, opts.seconds, opts.style, opts),
       schema: {
         type: 'object',
         properties: {

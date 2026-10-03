@@ -160,6 +160,12 @@ export interface ShortScriptRequest {
   /** Target narration length. */
   seconds: number;
   style: ShortScriptStyle;
+  /** In a batch: what this short focuses on (SHORT_BATCH_ANGLES). */
+  angle?: string;
+  /** In a batch: titles already written, so this one says something new. */
+  avoid?: string[];
+  /** In a batch from a book: read part `index` of `of` equal parts of the book, not its opening. */
+  part?: { index: number; of: number };
 }
 
 export interface ShortScriptResult {

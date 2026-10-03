@@ -9,3 +9,5 @@ export * from './performance';
 export * from './publish';
 export * from './library';
 export * from './shorts';
+export * from './shorts-batch';
+export * from './text';

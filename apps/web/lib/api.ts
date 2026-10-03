@@ -18,6 +18,8 @@ import type {
   LibrarySearchResult,
   PublishDraft,
   PublishState,
+  ShortBatchRequest,
+  ShortBatchResult,
   ShortDetail,
   ShortMetadataRequest,
   ShortMetadataResult,
@@ -223,6 +225,8 @@ export const api = {
   short: (id: string, signal?: AbortSignal) => request<ShortDetail>(`/shorts/${encodeURIComponent(id)}`, { signal }),
   shortDefaults: (signal?: AbortSignal) => request<ShortSettings>('/shorts/defaults', { signal }),
   createShort: (body: ShortInput) => request<ShortDetail>('/shorts', json('POST', body)),
+  /** Up to 10 shorts at once; with `render` they queue one after another. */
+  createShortBatch: (body: ShortBatchRequest) => request<ShortBatchResult>('/shorts/batch', json('POST', body)),
   updateShort: (id: string, body: ShortInput) => request<ShortDetail>(`/shorts/${encodeURIComponent(id)}`, json('PATCH', body)),
   renderShort: (id: string) => request<{ jobId: string }>(`/shorts/${encodeURIComponent(id)}/render`, { method: 'POST' }),
   cancelShort: (id: string) => request<{ ok: boolean }>(`/shorts/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),

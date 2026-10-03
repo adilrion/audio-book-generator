@@ -42,12 +42,14 @@ function setup(opts: { enqueueFails?: boolean } = {}) {
     },
     delete: async ({ where }: { where: Row }) => rows.splice(rows.findIndex((r) => r.id === where.id), 1)[0],
   };
+  const book = [
+    { text: 'Copyright 1918.', paragraph: { chapter: { title: 'Copyright' } } },
+    { text: 'The postmaster first took up his duties in the village of Ulapur.', paragraph: { chapter: { title: 'The Postmaster' } } },
+    { text: 'Though the village was a small one, there was an indigo factory near by.', paragraph: { chapter: { title: 'The Postmaster' } } },
+  ];
   const sentence = {
-    findMany: async () => [
-      { text: 'Copyright 1918.', paragraph: { chapter: { title: 'Copyright' } } },
-      { text: 'The postmaster first took up his duties in the village of Ulapur.', paragraph: { chapter: { title: 'The Postmaster' } } },
-      { text: 'Though the village was a small one, there was an indigo factory near by.', paragraph: { chapter: { title: 'The Postmaster' } } },
-    ],
+    findMany: async ({ skip = 0 }: { skip?: number } = {}) => book.slice(skip),
+    count: async () => book.length,
   };
   const queue = { enqueueShort: vi.fn(async (id: string) => (opts.enqueueFails ? Promise.reject(new Error('redis down')) : `${id}-job`)) };
   const projects = {
@@ -92,6 +94,57 @@ describe('ShortsService', () => {
     expect((await t.svc.create({ title: 'T', script: SCRIPT })).settings.look.motion).toBeUndefined(); // older shorts keep their render key
     await expect(t.svc.create({ title: 'x', script: 'y', settings: { look: { motion: 'confetti' } } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(t.svc.create({ title: 'x', script: 'y', settings: { look: { theme: 'disco' } } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('creates a batch in order with one voice and look, each with its own background, and queues it', async () => {
+    const t = setup();
+    const r = await t.svc.createBatch({
+      items: [
+        { title: 'Part 1', script: SCRIPT, hashtags: ['Shorts', 'Tagore'] },
+        { title: ' ', script: 'Second script.', look: { theme: 'aurora', motion: 'snow' } },
+      ],
+      settings: { look: { theme: 'cover', accent: '#22D3EE' } },
+      projectId: BOOK,
+      render: true,
+    });
+    expect(r.error).toBeUndefined();
+    expect(r.shorts.map((s) => [s.title, s.theme, s.bookTitle, s.queued])).toEqual([
+      ['Part 1', 'cover', undefined, true],
+      ['Untitled short', 'aurora', undefined, true],
+    ]);
+    expect(t.queue.enqueueShort.mock.calls.map((c) => c[0])).toEqual(r.shorts.map((s) => s.id)); // rendered in the batch's order
+    const second = await t.svc.detail(r.shorts[1].id);
+    expect(second.settings.look).toMatchObject({ theme: 'aurora', motion: 'snow', accent: '#22D3EE' });
+    expect(second.tags.length).toBeGreaterThan(0); // suggested from the book
+    expect(fs.existsSync(path.join(cfg.storage.shorts, r.shorts[0].id, 'cover.jpg'))).toBe(true);
+  });
+
+  it('checks the whole batch before saving any of it', async () => {
+    const t = setup();
+    const long = Array(700).fill('word').join(' ');
+    await expect(t.svc.createBatch({ items: [{ title: 'ok', script: SCRIPT }, { title: 'long', script: long }], render: true })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('short 2 takes about'),
+    });
+    await expect(t.svc.createBatch({ items: Array.from({ length: 11 }, () => ({ title: 'x', script: SCRIPT })) })).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('more than 10') });
+    await expect(t.svc.createBatch({ items: [] })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(t.rows).toHaveLength(0);
+    // as drafts, a long script is allowed (it can be shortened later)
+    expect((await t.svc.createBatch({ items: [{ title: 'long', script: long }] })).shorts[0].queued).toBe(false);
+  });
+
+  it('keeps the batch as drafts when the queue is down', async () => {
+    const t = setup({ enqueueFails: true });
+    const r = await t.svc.createBatch({ items: [{ title: 'a', script: SCRIPT }, { title: 'b', script: SCRIPT }], render: true });
+    expect(r.shorts).toHaveLength(2);
+    expect(r.error).toMatchObject({ retryable: true });
+    expect(t.queue.enqueueShort).toHaveBeenCalledTimes(1); // stops at the first failure
+  });
+
+  it('reads a later part of the book for a batch', async () => {
+    const t = setup();
+    expect(await t.svc.bookExcerpt(BOOK, 'en')).toMatch(/^The postmaster first took up/);
+    expect(await t.svc.bookExcerpt(BOOK, 'en', { index: 2, of: 3 })).toBe('Though the village was a small one, there was an indigo factory near by.');
   });
 
   it('copies the book cover when the cover background is chosen', async () => {

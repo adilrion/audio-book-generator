@@ -106,6 +106,7 @@ describe('AI script', () => {
     expect(req!.prompt).toContain('BOOK: The Postmaster by Tagore');
     expect(req!.prompt).toContain(`about ${targetWords(60, 'bn')} words`);
     expect(req!.prompt).toContain('Bangla');
+    expect(req!.prompt).not.toContain('ALREADY MADE');
     expect(req!.prompt).toContain('Ulapur');
     expect(req!.temperature).toBeGreaterThan(0);
     expect(r.title).toBe('The Postmaster in 60 seconds');
@@ -119,6 +120,24 @@ describe('AI script', () => {
   it('refuses an empty answer', async () => {
     const provider = { name: 'f', model: 'm', isAvailable: async () => ({ ok: true, message: '' }), generateJson: async <T>() => ({ title: 'x', script: '(music)', description: '', hashtags: [] }) as T };
     await expect(generateShortScript(provider, { kind: 'topic', topic: 'Black holes' }, { language: 'en', seconds: 30, style: 'summary' })).rejects.toMatchObject({ code: 'LLM_BAD_OUTPUT' });
+  });
+
+  it('gives each short of a batch its angle and the titles to avoid', async () => {
+    let prompt = '';
+    const provider: LLMProvider = {
+      name: 'f',
+      model: 'm',
+      isAvailable: async () => ({ ok: true, message: '' }),
+      generateJson: async <T>(r: LLMRequest) => {
+        prompt = r.prompt;
+        return { title: 'Omens', script: 'The universe is talking to you. Every sign, every stranger, every small coincidence is a word in a language you already know. Are you listening?', description: '', hashtags: [], tags: [] } as T;
+      },
+    };
+    await generateShortScript(provider, { kind: 'topic', topic: 'The Alchemist' }, { language: 'en', seconds: 30, style: 'story', angle: 'a common myth, busted', avoid: ['Your treasure is at home', ' '] });
+    expect(prompt).toContain('ANGLE: focus on a common myth, busted.');
+    expect(prompt).toContain('ALREADY MADE in this series');
+    expect(prompt).toContain('- Your treasure is at home');
+    expect(prompt).not.toMatch(/^- $/m);
   });
 
   it('writes YouTube details for a hand-written script', async () => {

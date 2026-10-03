@@ -36,6 +36,12 @@ export class ShortsController {
     return this.shorts.create(body);
   }
 
+  /** Up to 10 shorts with one voice and look; `render` queues them one after another. */
+  @Post('batch')
+  createBatch(@Body() body: unknown) {
+    return this.shorts.createBatch(body);
+  }
+
   /** Local AI writes a script (20–60 s); closing the request stops the model. Nothing is saved. */
   @Post('script')
   script(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {

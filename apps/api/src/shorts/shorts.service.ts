@@ -13,6 +13,7 @@ import {
   type JobStatus,
   type LanguageCode,
   type OutputFile,
+  type ShortBatchResult,
   type ShortDetail,
   type ShortMetadataResult,
   type ShortScriptResult,
@@ -26,7 +27,7 @@ import { badRequest, cannotNarrate, conflict, notFound } from '../common/errors'
 import { PrismaService } from '../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
 import { QueueService } from '../queue/queue.service';
-import { issues, metadataSchema, scriptRequestSchema, shortInputSchema, shortSettingsSchema, shortUpdateSchema } from './shorts.schema';
+import { batchSchema, issues, metadataSchema, scriptRequestSchema, shortInputSchema, shortSettingsSchema, shortUpdateSchema } from './shorts.schema';
 
 /** While one of these, a short is being worked on. */
 export const SHORT_ACTIVE: JobStatus[] = ['GENERATING_AUDIO', 'RENDERING'];
@@ -182,6 +183,17 @@ export class ShortsService {
     const input = parsed.data;
     const settings = this.parseSettings(input.settings);
     const book = input.projectId ? await this.projects.get(input.projectId) : undefined;
+    const s = await this.insert(input, settings, input.projectId ?? null, book);
+    if (input.render) await this.render(s.id);
+    return this.detail(s.id);
+  }
+
+  private async insert(
+    input: { title: string; script: string; description?: string; hashtags?: string[]; tags?: string[]; thumbnail?: unknown },
+    settings: ShortSettings,
+    projectId: string | null,
+    book?: Book,
+  ): Promise<Short> {
     const title = input.title.trim() || 'Untitled short';
     const hashtags = input.hashtags ?? [];
     const s = await this.prisma.short.create({
@@ -191,14 +203,52 @@ export class ShortsService {
         description: input.description?.trim() ?? '',
         hashtags,
         tags: this.tagsFor(input.tags, { title, hashtags, language: settings.language, book }),
-        ...(input.thumbnail && { thumbnail: input.thumbnail as unknown as Prisma.InputJsonValue }),
+        ...(input.thumbnail ? { thumbnail: input.thumbnail as Prisma.InputJsonValue } : {}),
         settings: settings as unknown as Prisma.InputJsonValue,
-        projectId: input.projectId ?? null,
+        projectId,
       },
     });
-    await this.ensureCover(s.id, settings, s.projectId);
-    if (input.render) await this.render(s.id);
-    return this.detail(s.id);
+    await this.ensureCover(s.id, settings, projectId);
+    return s;
+  }
+
+  /**
+   * Several shorts at once with one voice and look (each may have its own background or motion).
+   * Every short is checked before any is saved; the renders then queue in the batch's order, and
+   * the worker makes one short at a time, so a batch never competes with itself for the Mac.
+   */
+  async createBatch(body: unknown): Promise<ShortBatchResult> {
+    const parsed = batchSchema.safeParse(body);
+    if (!parsed.success) throw badRequest(`Invalid batch: ${issues(parsed.error)}`);
+    const input = parsed.data;
+    const base = this.parseSettings(input.settings);
+    const projectId = input.projectId ?? null;
+    const book = projectId ? await this.projects.get(projectId) : undefined;
+    const problems: string[] = [];
+    input.items.forEach((item, i) => {
+      const sec = estimateShortSec(item.script, base.language, base.tts.speed);
+      if (!item.script.trim()) problems.push(`short ${i + 1} has no script`);
+      else if (input.render && sec > SHORT_MAX_SEC * 1.15) problems.push(`short ${i + 1} takes about ${formatDuration(sec)} to read`);
+    });
+    if (problems.length) throw badRequest(`Some shorts cannot be made: ${problems.join('; ')}.`, 'A YouTube Short can be at most 3 minutes — shorten those scripts, or remove them from the batch.');
+
+    const ids: string[] = [];
+    for (const item of input.items) {
+      const settings: ShortSettings = { ...base, look: { ...base.look, ...item.look } };
+      ids.push((await this.insert(item, settings, projectId, book)).id);
+    }
+    let error: UserFacingError | undefined;
+    if (input.render) {
+      try {
+        for (const id of ids) await this.render(id);
+      } catch (e) {
+        // Saved, but the queue is down: the rest stay drafts, to render from their page later.
+        error = (e as AppError).toUser?.() ?? { code: 'INTERNAL', message: 'The shorts were saved, but could not be queued for rendering.', retryable: true };
+      }
+    }
+    const rows = await this.prisma.short.findMany({ where: { id: { in: ids } }, include: WITH_BOOK });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return { shorts: ids.flatMap((id) => (byId.has(id) ? [this.summary(byId.get(id)!)] : [])), ...(error && { error }) };
   }
 
   async update(id: string, body: unknown): Promise<ShortDetail> {
@@ -328,9 +378,9 @@ export class ShortsService {
     if (req.source.kind === 'topic') src = { kind: 'topic', topic: req.source.topic.trim() };
     else {
       const p = await this.projects.get(req.source.projectId);
-      src = { kind: 'book', title: p.name, author: p.document.author ?? undefined, excerpt: await this.bookExcerpt(p.id, req.language) };
+      src = { kind: 'book', title: p.name, author: p.document.author ?? undefined, excerpt: await this.bookExcerpt(p.id, req.language, req.part) };
     }
-    const draft = await generateShortScript(provider, src, { language: req.language, seconds: req.seconds, style: req.style }, signal);
+    const draft = await generateShortScript(provider, src, { language: req.language, seconds: req.seconds, style: req.style, angle: req.angle, avoid: req.avoid }, signal);
     return { ...draft, model: provider.model };
   }
 
@@ -345,12 +395,19 @@ export class ShortsService {
     return { ...r, model: provider.model };
   }
 
-  /** The opening of the book's first real chapter (front matter skipped), from its analysed sentences. */
-  async bookExcerpt(projectId: string, language: LanguageCode): Promise<string> {
+  /**
+   * The opening of the book's first real chapter (front matter skipped), from its analysed
+   * sentences — or, for `part` (a batch), the start of that equal share of the book, so a batch's
+   * shorts draw on the whole book instead of all retelling its first pages.
+   */
+  async bookExcerpt(projectId: string, language: LanguageCode, part?: { index: number; of: number }): Promise<string> {
+    const where = { paragraph: { chapter: { projectId } } };
+    const skip = part && part.index > 0 ? Math.floor(((await this.prisma.sentence.count({ where })) * part.index) / part.of) : 0;
     const rows = await this.prisma.sentence.findMany({
-      where: { paragraph: { chapter: { projectId } } },
+      where,
       select: { text: true, paragraph: { select: { chapter: { select: { title: true } } } } },
       orderBy: [{ paragraph: { chapter: { index: 'asc' } } }, { paragraph: { index: 'asc' } }, { index: 'asc' }],
+      skip,
       take: 600,
     });
     const max = language === 'bn' ? 2500 : 3500; // Bangla needs more tokens per character
