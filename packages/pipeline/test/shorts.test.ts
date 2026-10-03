@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { estimateShortSec, suggestShortTags, youtubeTagChars } from '@app/types';
 import type { LLMProvider, LLMRequest } from '../src/llm/provider';
 import { captionGroups, captionsSrt, groupLimits } from '../src/shorts/captions';
-import { captionWords, shortRenderKey, shortSegments } from '../src/shorts/render';
+import { hashKey } from '@app/shared';
+import { captionWords, narrationKey, shortRenderKey, shortSegments } from '../src/shorts/render';
 import { cleanHashtags, cleanScript, cleanTags, generateShortMetadata, generateShortScript, targetWords } from '../src/shorts/script';
 
 const timed = (text: string, dt = 0.4) => text.split(' ').map((t, i) => ({ t, start: i * dt, end: (i + 1) * dt }));
@@ -55,6 +56,8 @@ describe('short narration', () => {
     expect(segs.map((s) => s.pauseMs)).toEqual([220, 420, 0]);
     expect(segs[2].printed).toBe('This is that story — e.g. a true one.');
     expect(segs[2].text).toContain('for example');
+    // a motivational speaker lets each line land
+    expect(shortSegments('Get up. Start the work.\nNow.', 'en', 1.8).map((s) => s.pauseMs)).toEqual([396, 756, 0]);
   });
 
   it('times the printed words against what the voice said', () => {
@@ -72,6 +75,16 @@ describe('short narration', () => {
     expect(shortRenderKey({ title: 'T', script: 'Hello!', settings }, false)).not.toBe(a);
     expect(shortRenderKey({ title: 'T', script: 'Hello.', settings: { ...settings, look: { ...settings.look, accent: '#FF0000' } } }, false)).not.toBe(a);
     expect(shortRenderKey({ title: 'T', script: 'Hello.', settings }, false)).toBe(a);
+  });
+
+  it('keeps the keys of natural-voice shorts, and re-narrates only for longer pauses', () => {
+    const settings = { language: 'en' as const, tts: { engine: 'kokoro' as const, voice: 'af_heart', speed: 1 }, look: { theme: 'midnight' as const, captions: 'karaoke' as const, accent: '#FACC15', position: 'center' as const, uppercase: true, showTitle: true, showProgress: true } };
+    const input = { id: 'x', title: 'T', script: 'Hello.', settings };
+    // the keys of shorts made before speaking styles existed
+    expect(shortRenderKey(input, false)).toBe(hashKey('short-video-v1', 'T', 'Hello.', settings, false, null));
+    expect(narrationKey(input, 'v')).toBe(hashKey('short-narration-v1', 'Hello.', 'en', settings.tts, 'v'));
+    expect(narrationKey({ ...input, settings: { ...settings, voiceFx: 'natural' as const } }, 'v')).toBe(narrationKey(input, 'v'));
+    expect(narrationKey({ ...input, settings: { ...settings, voiceFx: 'powerful' as const } }, 'v')).not.toBe(narrationKey(input, 'v'));
   });
 
   it('estimates the length of a script', () => {

@@ -29,9 +29,9 @@ export type ShortTheme =
   | 'rays';
 
 /**
- * The narrator's tone, applied to the voice when the audio is mastered: `deep` lowers it about two
- * semitones; `powerful` lowers it further, with a strong low end, compression and a short echo — the
- * "deep motivation" sound. The length does not change, so captions stay in sync.
+ * How the narrator sounds and paces itself, applied when the audio is mastered: `deep` is a warm
+ * storyteller (a little deeper and warmer), `powerful` a motivational speaker (deeper, close and
+ * confident, with longer pauses between sentences). Captions stay in sync.
  */
 export type ShortVoiceFx = 'natural' | 'deep' | 'powerful';
 

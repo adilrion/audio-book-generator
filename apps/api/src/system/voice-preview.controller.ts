@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Controller, Get, Inject, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { applyVoiceFx, createTTSProvider, ttsEngineNames } from '@app/pipeline';
+import { VOICE_FX_VERSION, applyVoiceFx, createTTSProvider, ttsEngineNames } from '@app/pipeline';
 import type { ShortVoiceFx } from '@app/types';
 import { hashKey } from '@app/shared';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
@@ -96,7 +96,7 @@ export class VoicePreviewController {
       await provider.synthesize(text, { voice: info.id, speed, language: engineLanguage, sampleRate, outPath: file });
     });
     if (fx === 'natural') return file;
-    const toned = path.join(this.cfg.storage.audio, 'previews', `${key}-${fx}.wav`);
+    const toned = path.join(this.cfg.storage.audio, 'previews', `${key}-${fx}-v${VOICE_FX_VERSION}.wav`);
     await this.once(`${key}-${fx}`, toned, () => applyVoiceFx(this.cfg, file, toned, fx));
     return toned;
   }

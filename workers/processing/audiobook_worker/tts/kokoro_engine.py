@@ -11,6 +11,14 @@ from .base import TTSEngine, Voice
 _LANG_BY_PREFIX = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi", "i": "it", "j": "ja", "p": "pt-br", "z": "cmn"}
 _LANG_NAMES = {"a": "en", "b": "en", "e": "es", "f": "fr", "h": "hi", "i": "it", "j": "ja", "p": "pt", "z": "zh"}
 
+# Voices made by mixing Kokoro's own (their style vectors, weighted). Ids follow Kokoro's scheme, so the
+# language and gender come from the prefix like any other voice.
+#   am_coach: Onyx's depth with Puck's expression — deep (about 95 Hz) yet rising and falling like a
+#   person speaking to a room, where Onyx alone is deep but flat. Made for motivational Shorts.
+BLENDS: dict[str, tuple[tuple[str, float], ...]] = {
+    "am_coach": (("am_puck", 0.5), ("am_onyx", 0.5)),
+}
+
 
 def _paths() -> tuple[str, str]:
     return (os.environ.get("KOKORO_MODEL_PATH", "storage/models/kokoro/kokoro-v1.0.onnx"),
@@ -42,6 +50,7 @@ class KokoroEngine(TTSEngine):
         providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"] if provider == "coreml" else ["CPUExecutionProvider"]
         session = ort.InferenceSession(model, sess_options=so, providers=providers)
         self._k = Kokoro.from_session(session, voices)
+        self._styles: dict[str, np.ndarray] = {}
 
     @classmethod
     def available(cls) -> tuple[bool, str]:
@@ -55,14 +64,25 @@ class KokoroEngine(TTSEngine):
         return True, "ready"
 
     def voices(self) -> list[Voice]:
+        own = set(self._k.get_voices())
+        blends = [b for b, parts in BLENDS.items() if all(p in own for p, _ in parts)]
         out = []
-        for v in sorted(self._k.get_voices()):
+        for v in sorted(own) + blends:
             prefix, gender = v[0], v[1] if len(v) > 1 else ""
             out.append(Voice(id=v, name=v.split("_", 1)[-1].capitalize(), language=_LANG_NAMES.get(prefix, "en"),
                              gender={"f": "female", "m": "male"}.get(gender)))
         return out
 
+    def _voice(self, voice: str):
+        """A Kokoro voice name, or the mixed style vector of a blend."""
+        parts = BLENDS.get(voice)
+        if not parts:
+            return voice
+        if voice not in self._styles:
+            self._styles[voice] = sum(self._k.get_voice_style(p) * w for p, w in parts)
+        return self._styles[voice]
+
     def synthesize(self, text: str, voice: str, speed: float, language: str) -> tuple[np.ndarray, int]:
         lang = _LANG_BY_PREFIX.get(voice[:1], "en-us") if language in ("en", "", None) else language
-        samples, rate = self._k.create(text, voice=voice, speed=float(speed), lang=lang, trim=True)
+        samples, rate = self._k.create(text, voice=self._voice(voice), speed=float(speed), lang=lang, trim=True)
         return samples, rate

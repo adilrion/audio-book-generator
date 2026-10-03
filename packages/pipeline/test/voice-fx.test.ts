@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '@app/config';
-import { applyVoiceFx, voiceFxFilter } from '../src/audio/voice-fx';
+import { applyVoiceFx, pauseScale, voiceFxFilter } from '../src/audio/voice-fx';
 
 const cfg = loadConfig();
 const hasFfmpeg = (() => {
@@ -42,25 +42,28 @@ function peakHz(file: string): number {
 }
 
 describe('voice tones', () => {
-  it('lowers the pitch by resampling and puts the tempo back', () => {
+  it('lowers the pitch a little by resampling, puts the tempo back, and adds no echo', () => {
     expect(voiceFxFilter(undefined)).toBeUndefined();
     expect(voiceFxFilter('natural')).toBeUndefined();
-    expect(voiceFxFilter('deep')).toMatch(/^aresample=48000,asetrate=42240,aresample=48000,atempo=1\.136364,bass=/);
-    expect(voiceFxFilter('powerful')).toContain('asetrate=39360');
-    expect(voiceFxFilter('powerful')).toContain('aecho=');
+    expect(voiceFxFilter('deep')).toMatch(/^aresample=48000,asetrate=46080,aresample=48000,atempo=1\.041667,equalizer=/);
+    expect(voiceFxFilter('powerful')).toMatch(/^aresample=48000,asetrate=45600,aresample=48000,atempo=1\.052632,bass=/);
+    expect(voiceFxFilter('powerful')).not.toMatch(/aecho|reverb/); // a person in a room, not an effect
+  });
+
+  it('gives the speaking styles longer pauses', () => {
+    expect([pauseScale(undefined), pauseScale('natural'), pauseScale('deep'), pauseScale('powerful')]).toEqual([1, 1, 1.35, 1.8]);
   });
 
   it.skipIf(!hasFfmpeg)('keeps the length and drops the pitch', async () => {
     const src = path.join(tmp, 'tone.wav');
     execFileSync(cfg.FFMPEG_BIN, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=200:duration=2:sample_rate=24000', src]);
     for (const [fx, factor] of [
-      ['deep', 0.88],
-      ['powerful', 0.82],
+      ['deep', 0.96],
+      ['powerful', 0.95],
     ] as const) {
       const out = path.join(tmp, `${fx}.wav`);
       await applyVoiceFx(cfg, src, out, fx);
-      expect(Number(probe(out).format.duration)).toBeCloseTo(2, 0); // the echo adds a short tail at most
-      expect(Math.abs(Number(probe(out).format.duration) - 2)).toBeLessThan(0.12);
+      expect(Math.abs(Number(probe(out).format.duration) - 2)).toBeLessThan(0.03);
       expect(Math.abs(peakHz(out) - 200 * factor)).toBeLessThanOrEqual(3);
     }
     const plain = path.join(tmp, 'natural.wav');

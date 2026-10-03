@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import numpy as np
+import pytest
 import soundfile as sf
 
 from audiobook_worker.tts import registry, service
@@ -68,3 +71,19 @@ def test_retry_on_transient_failure(tmp_path):
         assert FakeEngine.calls == 2
     finally:
         FakeEngine.fail_first = False
+
+
+_KOKORO = Path(__file__).resolve().parents[3] / "storage" / "models" / "kokoro"
+
+
+@pytest.mark.skipif(not (_KOKORO / "kokoro-v1.0.onnx").exists(), reason="Kokoro model not downloaded")
+def test_kokoro_coach_is_a_listed_blend_that_speaks(monkeypatch):
+    monkeypatch.setenv("KOKORO_MODEL_PATH", str(_KOKORO / "kokoro-v1.0.onnx"))
+    monkeypatch.setenv("KOKORO_VOICES_PATH", str(_KOKORO / "voices-v1.0.bin"))
+    from audiobook_worker.tts.kokoro_engine import KokoroEngine
+
+    eng = KokoroEngine()
+    coach = next(v for v in eng.voices() if v.id == "am_coach")
+    assert (coach.name, coach.language, coach.gender) == ("Coach", "en", "male")
+    audio, rate = eng.synthesize("Get up. Start the work.", "am_coach", 1.0, "en")
+    assert rate > 0 and len(audio) > rate * 0.5 and float(np.abs(audio).max()) > 0.05

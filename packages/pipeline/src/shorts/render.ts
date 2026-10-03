@@ -4,6 +4,7 @@ import type { AppConfig } from '@app/config';
 import { AppError, atomicWrite, atomicWriteJson, ensureDir, exists, formatDuration, hashKey, readJsonIfExists } from '@app/shared';
 import { SHORT_FPS, SHORT_MAX_SEC, SHORT_SIZE, type ShortSettings } from '@app/types';
 import { masterAudio, muxFinal, validateOutput } from '../audio/ffmpeg';
+import { VOICE_FX_VERSION, pauseScale } from '../audio/voice-fx';
 import { CachePaths } from '../pipeline/paths';
 import type { PythonPool } from '../python/bridge';
 import { isSpeakable, normalizeNarration } from '../text/normalize';
@@ -48,7 +49,7 @@ const PAUSE_MS = { sentence: 220, paragraph: 420 };
  * Script → one TTS segment per sentence: `text` is what the voice says (abbreviations spelled out,
  * …), `printed` what the captions show (the script as written).
  */
-export function shortSegments(script: string, language: string): (TTSSegment & { printed: string })[] {
+export function shortSegments(script: string, language: string, pauses = 1): (TTSSegment & { printed: string })[] {
   const spans = splitSentences(script, language);
   const segments: (TTSSegment & { printed: string })[] = [];
   spans.forEach((s, i) => {
@@ -57,7 +58,7 @@ export function shortSegments(script: string, language: string): (TTSSegment & {
     if (!isSpeakable(text)) return;
     const next = spans[i + 1];
     const between = next ? script.slice(s.end, next.start) : '';
-    segments.push({ id: `s${i}`, text, printed, pauseMs: !next ? 0 : between.includes('\n') ? PAUSE_MS.paragraph : PAUSE_MS.sentence });
+    segments.push({ id: `s${i}`, text, printed, pauseMs: !next ? 0 : Math.round((between.includes('\n') ? PAUSE_MS.paragraph : PAUSE_MS.sentence) * pauses) });
   });
   if (segments.length) segments[segments.length - 1].pauseMs = 0;
   return segments;
@@ -75,12 +76,16 @@ export function captionWords(segments: { id: string; text: string; printed: stri
 }
 
 /** What the narration depends on. */
-export const narrationKey = (input: ShortRenderInput, ttsVersion: string) =>
-  hashKey('short-narration-v1', input.script, input.settings.language, input.settings.tts, ttsVersion);
+export const narrationKey = (input: ShortRenderInput, ttsVersion: string) => {
+  const pauses = pauseScale(input.settings.voiceFx);
+  return hashKey('short-narration-v1', input.script, input.settings.language, input.settings.tts, ttsVersion, ...(pauses !== 1 ? [pauses] : []));
+};
 
 /** What the finished video depends on (to tell when it is out of date). */
-export const shortRenderKey = (input: Pick<ShortRenderInput, 'title' | 'script' | 'settings'>, hasCover: boolean, intro: string | null = null) =>
-  hashKey('short-video-v1', input.title, input.script, input.settings, hasCover, intro);
+export const shortRenderKey = (input: Pick<ShortRenderInput, 'title' | 'script' | 'settings'>, hasCover: boolean, intro: string | null = null) => {
+  const fx = input.settings.voiceFx;
+  return hashKey('short-video-v1', input.title, input.script, input.settings, hasCover, intro, ...(fx && fx !== 'natural' ? [`voice-fx-${VOICE_FX_VERSION}`] : []));
+};
 
 /**
  * The image files a render uses: the cover (cover background) and the saved thumbnail (opening
@@ -113,7 +118,7 @@ export async function renderShort(cfg: AppConfig, input: ShortRenderInput, o: Sh
   const meta = path.join(work, `narration-${nKey}.json`);
   let narration = (await exists(flac)) ? await readJsonIfExists<Narration>(meta) : undefined;
   if (!narration) {
-    const segments = shortSegments(input.script, language);
+    const segments = shortSegments(input.script, language, pauseScale(input.settings.voiceFx));
     if (!segments.length) throw new AppError('SHORT_EMPTY', 'The script has nothing to read aloud.', { hint: 'Write or generate a script first.', retryable: false });
     const r = await provider.synthesizeSegments(
       segments.map(({ id, text, pauseMs }) => ({ id, text, pauseMs })),

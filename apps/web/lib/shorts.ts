@@ -29,15 +29,15 @@ export const SHORT_MOTIONS: { value: ShortMotion; label: string; hint: string }[
   { value: 'rain', label: 'Rain', hint: 'Slanted streaks, moody' },
 ];
 
-/** The narrator's tone (applied when the audio is mastered; the length and captions do not change). */
+/** How the narrator sounds and paces itself (applied when the audio is mastered; captions stay in sync). */
 export const SHORT_VOICE_FX: { value: ShortVoiceFx; label: string; hint: string }[] = [
-  { value: 'natural', label: 'Natural', hint: 'The voice as it is' },
-  { value: 'deep', label: 'Deep', hint: 'Lower and warmer' },
-  { value: 'powerful', label: 'Deep & powerful', hint: 'Much lower, strong bass, a little echo — for motivation' },
+  { value: 'natural', label: 'Natural', hint: 'The voice just as it is' },
+  { value: 'deep', label: 'Warm storyteller', hint: 'A little deeper and warmer, unhurried — for stories and calm lessons' },
+  { value: 'powerful', label: 'Motivational speaker', hint: 'Deep, close and confident, with pauses that let each line land' },
 ];
 
-/** "Deep motivation": a deep male narrator (English), a little slower, in the powerful tone. */
-export const DEEP_VOICE = { engine: 'kokoro', voice: 'am_onyx', speed: 0.92, fx: 'powerful' } as const;
+/** The motivational speaker preset: Coach (deep and expressive, English), unhurried, in that style. */
+export const DEEP_VOICE = { engine: 'kokoro', voice: 'am_coach', speed: 0.95, fx: 'powerful' } as const;
 
 export const CAPTION_STYLES: { value: ShortCaptionStyle; label: string; hint: string }[] = [
   { value: 'karaoke', label: 'Karaoke', hint: 'A few words, the spoken one in colour' },

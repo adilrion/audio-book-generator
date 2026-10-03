@@ -36,9 +36,11 @@ export function ShortVoiceFields({ settings, config, update }: { settings: Short
           <AudioLines className="size-4" aria-hidden />
         </span>
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <p className="text-sm font-medium">Deep motivation voice</p>
+          <p className="text-sm font-medium">Motivational speaker</p>
           <p className="text-xs text-muted-foreground">
-            {deepVoice ? 'Onyx — a deep male narrator — a little slower, in the deep & powerful tone.' : 'The deep & powerful tone, a little slower.'}
+            {deepVoice
+              ? 'Coach — a deep voice that still rises and falls like a person on stage — unhurried, with pauses that let every line land.'
+              : 'Deep, close and confident, unhurried, with pauses that let every line land.'}
           </p>
         </div>
         <Button size="sm" variant={deepInUse ? 'ghost' : 'outline'} onClick={useDeep} disabled={deepInUse}>
@@ -80,8 +82,8 @@ export function ShortVoiceFields({ settings, config, update }: { settings: Short
       >
         <Slider min={0.5} max={2} step={0.05} value={[settings.tts.speed]} onValueChange={([s]) => update((d) => void (d.tts.speed = Math.round(s * 100) / 100))} aria-label="Narration speed" />
       </Field>
-      <Field label="Tone" hint="Applied to the narration when the video is made — its length and the captions stay the same. Listen plays the voice in this tone.">
-        <RadioGroup value={fx} onValueChange={(v) => update((d) => void (d.voiceFx = v as ShortVoiceFx))} className="grid gap-2 sm:grid-cols-3" aria-label="Tone">
+      <Field label="Speaking style" hint="How the narrator sounds and paces itself; the captions follow along. Listen plays the voice in this style.">
+        <RadioGroup value={fx} onValueChange={(v) => update((d) => void (d.voiceFx = v as ShortVoiceFx))} className="grid gap-2 sm:grid-cols-3" aria-label="Speaking style">
           {SHORT_VOICE_FX.map((t) => (
             <RadioCard key={t.value} value={t.value} className="pr-8">
               <CheckedMark />
