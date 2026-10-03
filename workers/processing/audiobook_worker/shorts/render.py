@@ -4,7 +4,8 @@ the narration is muxed afterwards).
 Everything that does not change is drawn once: the background with the title (and the book cover
 card) is one base frame, and each caption card is rendered once per spoken word as a premultiplied
 patch. A frame is then a copy of the base plus one small blend, so a 60 s short renders in seconds.
-Sizes scale with the frame width, so tests can render tiny videos.
+Animated backgrounds and motion overlays (scenes.py) are drawn per frame, under the title and the
+captions. Sizes scale with the frame width, so tests can render tiny videos.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from ..errors import WorkerError
 from ..util import atomic_path
 from ..video.encoder import FrameWriter
+from .scenes import MOTIONS, SCENES
 
 cv2.setNumThreads(max(1, int(os.environ.get("RENDER_THREADS", "1") or 1)))
 
@@ -355,9 +357,12 @@ class ShortCompositor:
         self.show_progress = bool(look.get("showProgress", True))
         self.zoom_bg = None
         self.zoom = 1.07
+        self.scene = None
         if cover:
             self.zoom_bg = cover_background(cover, self.W, self.H, self.zoom)
             base = self._zoomed(0.0)
+        elif theme in SCENES:
+            base = None
         else:
             top, bottom = THEMES.get(theme, THEMES["midnight"])
             base = gradient(self.W, self.H, top, bottom)
@@ -378,9 +383,13 @@ class ShortCompositor:
         center_y = self.H * (0.66 if lower else 0.52)
         if cover:  # below the card, above YouTube's caption area
             center_y = max(center_y, min(self.H * 0.7, y + self.H * 0.1))
+        if theme in SCENES and not cover:
+            self.scene = SCENES[theme](self.W, self.H, center_y / self.H)
+        motion = MOTIONS.get(look.get("motion") or "")
+        self.motion = motion(self.W, self.H, self.accent, self.light) if motion else None
         self.statics = statics
         self.base = base
-        if not cover:
+        if base is not None and not cover and not self.motion:  # nothing moves under the title: bake it in
             for p in statics:
                 p.blend(self.base)
             self.statics = []
@@ -419,10 +428,14 @@ class ShortCompositor:
     def _frame(self, t: float) -> np.ndarray:
         if self.zoom_bg is not None:
             img = self._zoomed(t)
-            for p in self.statics:
-                p.blend(img)
+        elif self.scene is not None:
+            img = self.scene.frame(t)
         else:
             img = self.base.copy()
+        if self.motion is not None:
+            self.motion.apply(img, t)
+        for p in self.statics:
+            p.blend(img)
         gi = self._group_at(t)
         if gi >= 0:
             patch = self.captions.patch(gi, self.captions.active_word(gi, t))

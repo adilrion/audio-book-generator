@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from audiobook_worker.shorts.render import Captions, ShortCompositor, font_for, render_short, wrap
+from audiobook_worker.shorts.scenes import MOTIONS, SCENES
 
 
 def words(text, t0=0.0, dt=0.3):
@@ -83,6 +84,49 @@ def test_cover_theme_draws_the_cover(tmp_path):
     assert comp.zoom_bg is not None
     assert (f0[..., 2] > 150).sum() > 500  # the red card is visible
     assert not np.array_equal(f0, f1)  # slow zoom + progress
+
+
+@pytest.mark.parametrize("theme", sorted(SCENES))
+def test_animated_backgrounds_move_and_are_repeatable(tmp_path, theme):
+    p = params(tmp_path, groups=[])
+    p["look"] = {**LOOK, "theme": theme, "showProgress": False}
+    comp = ShortCompositor(p)
+    a, b = comp.frame(0.5), comp.frame(2.0)
+    assert comp.scene is not None and a.shape == (384, 216, 3) and a.dtype == np.uint8
+    assert np.abs(a.astype(int) - b.astype(int)).mean() > 0.2  # it moves
+    assert np.array_equal(comp.frame(0.5), ShortCompositor(p).frame(0.5))  # a pure, seeded function of time
+    assert a[:, :, :].mean() > 8  # not a black frame
+
+
+@pytest.mark.parametrize("motion", sorted(MOTIONS))
+@pytest.mark.parametrize("theme", ["midnight", "paper"])
+def test_motion_overlays_move_over_any_background(tmp_path, motion, theme):
+    p = params(tmp_path, groups=[])
+    p["look"] = {**LOOK, "theme": theme, "motion": motion, "showProgress": False}
+    comp = ShortCompositor(p)
+    still = dict(p, look={**p["look"], "motion": None})
+    plain = ShortCompositor(still).frame(1.0)
+    frames = [comp.frame(t) for t in (0.4, 1.0, 1.7)]
+    assert comp.motion is not None and comp.statics  # the title stays on top, drawn after the particles
+    assert np.abs(frames[1].astype(int) - plain.astype(int)).sum() > 0  # particles are visible
+    assert np.abs(frames[0].astype(int) - frames[2].astype(int)).sum() > 0  # and they move
+
+
+def test_motion_over_the_cover(tmp_path):
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (300, 450), (200, 30, 30)).save(cover)
+    p = params(tmp_path, coverPath=str(cover))
+    p["look"] = {**LOOK, "theme": "cover", "motion": "embers"}
+    comp = ShortCompositor(p)
+    assert comp.zoom_bg is not None and comp.motion is not None
+    assert (comp.frame(1.0)[..., 2] > 150).sum() > 500  # the card is still drawn
+
+
+def test_unknown_theme_and_motion_fall_back(tmp_path):
+    p = params(tmp_path)
+    p["look"] = {**LOOK, "theme": "nope", "motion": "nope"}
+    comp = ShortCompositor(p)
+    assert comp.scene is None and comp.motion is None and comp.base is not None
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")

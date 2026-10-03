@@ -1,12 +1,65 @@
 'use client';
 
-import type { ShortSettings } from '@app/types';
-import type { CSSProperties } from 'react';
+import type { ShortMotion, ShortSettings, ShortTheme } from '@app/types';
+import { type CSSProperties, useMemo } from 'react';
+import { isSceneTheme, motionBlend, motionSvg, sceneSvg, svgDataUrl } from '@/lib/short-scenes';
 import { SHORT_THEMES, effectiveCaptions } from '@/lib/shorts';
 import { cn } from '@/lib/utils';
 
 const CAPTION_FONT = '"Avenir Next", "Arial Black", "Helvetica Neue", system-ui, sans-serif';
 const BANGLA_FONT = '"Kohinoor Bangla", "Bangla Sangam MN", "Noto Sans Bengali", system-ui, sans-serif';
+
+/**
+ * The short's background as the renderer draws it: a gradient, the blurred book cover or an
+ * animated scene, with the motion overlay on top. Fills its (positioned) parent. `still` shows an
+ * animated scene as its plain gradient (for small swatches); `scale` thins out the particles.
+ */
+export function ShortBackdrop({
+  theme,
+  motion,
+  accent,
+  coverUrl,
+  focus,
+  still,
+  scale,
+  className,
+}: {
+  theme: ShortTheme;
+  motion?: ShortMotion;
+  accent: string;
+  coverUrl?: string;
+  focus?: number;
+  still?: boolean;
+  scale?: number;
+  className?: string;
+}) {
+  const cover = theme === 'cover' && coverUrl ? coverUrl : undefined;
+  const shown = theme === 'cover' && !cover ? 'midnight' : theme;
+  const t = SHORT_THEMES[shown];
+  const scene = useMemo(() => (!still && isSceneTheme(shown) ? svgDataUrl(sceneSvg(shown, { focus })) : undefined), [still, shown, focus]);
+  const overlay = useMemo(() => (motion && motion !== 'none' ? svgDataUrl(motionSvg(motion, { accent, light: !!t.light, scale })) : undefined), [motion, accent, t.light, scale]);
+  return (
+    <span
+      className={cn('pointer-events-none absolute inset-0 isolate overflow-hidden', className)}
+      style={cover || scene ? { background: '#000' } : { background: `linear-gradient(180deg, ${t.top}, ${t.bottom})` }}
+      aria-hidden
+    >
+      {cover && (
+        // eslint-disable-next-line @next/next/no-img-element -- page render from the local API
+        <img src={cover} alt="" className="absolute inset-0 size-full scale-125 object-cover blur-2xl brightness-[0.45]" />
+      )}
+      {scene && (
+        // eslint-disable-next-line @next/next/no-img-element -- an inline SVG
+        <img src={scene} alt="" className="absolute inset-0 size-full object-cover" />
+      )}
+      {!cover && !scene && <span className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_52%,rgb(255_255_255/0.1),transparent_60%)]" />}
+      {overlay && (
+        // eslint-disable-next-line @next/next/no-img-element -- an inline SVG
+        <img src={overlay} alt="" className="absolute inset-0 size-full object-cover" style={{ mixBlendMode: motionBlend(!!t.light) }} />
+      )}
+    </span>
+  );
+}
 
 /**
  * One frame of the short, drawn with CSS: same layout as the renderer (sizes in container-width
@@ -40,17 +93,8 @@ export function ShortPreview({ title, script, settings, coverUrl, className }: {
   };
 
   return (
-    <div
-      className={cn('@container relative isolate aspect-[9/16] overflow-hidden rounded-2xl bg-black shadow-book select-none', className)}
-      style={cover ? undefined : { background: `linear-gradient(180deg, ${t.top}, ${t.bottom})` }}
-      aria-label="Preview of the short"
-      role="img"
-    >
-      {cover && (
-        // eslint-disable-next-line @next/next/no-img-element -- page render from the local API
-        <img src={cover} alt="" className="absolute inset-0 -z-10 size-full scale-125 object-cover blur-2xl brightness-[0.45]" />
-      )}
-      {!cover && <span className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_50%_52%,rgb(255_255_255/0.1),transparent_60%)]" aria-hidden />}
+    <div className={cn('@container relative isolate aspect-[9/16] overflow-hidden rounded-2xl bg-black shadow-book select-none', className)} aria-label="Preview of the short" role="img">
+      <ShortBackdrop theme={look.theme} motion={look.motion} accent={look.accent} coverUrl={coverUrl} focus={top / 100} />
       {look.showProgress && (
         <span className="absolute inset-x-0 top-0 h-[0.75cqw] bg-white/30">
           <span className="block h-full w-[35%]" style={{ background: look.accent }} />

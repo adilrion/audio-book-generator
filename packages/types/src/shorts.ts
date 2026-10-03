@@ -10,8 +10,26 @@ import type { JobStatus, UserFacingError } from './status';
  * word-by-word captions.
  */
 
-/** Background: a gradient, or the book's cover (blurred behind a sharp cover card). */
-export type ShortTheme = 'midnight' | 'sunset' | 'ocean' | 'forest' | 'paper' | 'cover';
+/**
+ * Background: a still gradient, the book's cover (blurred behind a sharp cover card), or an
+ * animated scene drawn by the renderer (workers/processing/audiobook_worker/shorts/scenes.py).
+ */
+export type ShortTheme =
+  | 'midnight'
+  | 'sunset'
+  | 'ocean'
+  | 'forest'
+  | 'paper'
+  | 'cover'
+  | 'aurora'
+  | 'liquid'
+  | 'galaxy'
+  | 'synthwave'
+  | 'waves'
+  | 'rays';
+
+/** Particles drawn over any background (the cover too), under the title and captions. */
+export type ShortMotion = 'none' | 'bokeh' | 'snow' | 'rain' | 'embers' | 'sparkles';
 
 /**
  * `karaoke`: a few words at a time, the spoken one in the accent colour. `box`: the spoken word on
@@ -24,6 +42,8 @@ export interface ShortLook {
   captions: ShortCaptionStyle;
   /** #RRGGBB */
   accent: string;
+  /** Particles over the background (left out: none, so older shorts keep their render key). */
+  motion?: ShortMotion;
   /** `center` sits mid-screen; `lower` sits above YouTube's title and buttons. */
   position: 'center' | 'lower';
   /** English captions in capitals (the usual Shorts look). Ignored for Bangla. */

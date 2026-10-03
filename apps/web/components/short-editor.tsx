@@ -1,11 +1,11 @@
 'use client';
 
-import { DEFAULT_SHORT_LOOK, type LanguageCode, type ShortDetail, type ShortScriptStyle, type ShortSettings, type ShortTheme, YOUTUBE_LIMITS, suggestShortTags, youtubeTagChars } from '@app/types';
+import { DEFAULT_SHORT_LOOK, type LanguageCode, type ShortDetail, type ShortMotion, type ShortScriptStyle, type ShortSettings, type ShortTheme, YOUTUBE_LIMITS, suggestShortTags, youtubeTagChars } from '@app/types';
 import { BookOpen, Captions, LoaderCircle, Mic, Palette, PenLine, Play, Save, Sparkles, Square, Tags, TriangleAlert, Type, Wand2 } from 'lucide-react';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { ApiErrorAlert } from '@/components/api-error-alert';
 import { CheckedMark, ColorSwatches, Field, FormSection, ToggleList, ToggleRow, VoiceFields } from '@/components/settings-form';
-import { ShortPreview } from '@/components/short-preview';
+import { ShortBackdrop, ShortPreview } from '@/components/short-preview';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { RadioCard, RadioGroup } from '@/components/ui/radio-group';
@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useApi } from '@/hooks/use-api';
 import { type ApiError, api, pageImageUrl, toApiError } from '@/lib/api';
-import { CAPTION_STYLES, SCRIPT_LENGTHS, SCRIPT_STYLES, SHORT_ACCENTS, SHORT_THEMES, formatHashtags, formatTags, lengthVerdict, parseHashtags, parseTags } from '@/lib/shorts';
+import { CAPTION_STYLES, SCRIPT_LENGTHS, SCRIPT_STYLES, SHORT_ACCENTS, SHORT_MOTIONS, SHORT_THEMES, formatHashtags, formatTags, lengthVerdict, parseHashtags, parseTags } from '@/lib/shorts';
 import { cn } from '@/lib/utils';
 import { applyLanguage } from '@/lib/voices';
 
@@ -351,21 +351,40 @@ export function ShortEditor({ initial, initialProjectId, onSaved, onCancel }: { 
 
         {/* ── look ── */}
         <FormSection step={3} icon={<Palette />} title="Look" description="Vertical 1080 × 1920 at 30 fps, with the captions inside YouTube’s safe area.">
-          <Field label="Background">
+          <Field label="Background" hint="The animated ones move behind your captions the whole way through — they catch the eye in a feed.">
             <RadioGroup value={settings.look.theme} onValueChange={(v) => updateLook((d) => void (d.look.theme = v as ShortTheme))} className="grid grid-cols-3 gap-2 sm:grid-cols-6" aria-label="Background">
               {(Object.keys(SHORT_THEMES) as ShortTheme[]).map((k) => {
                 const t = SHORT_THEMES[k];
                 return (
                   <RadioCard key={k} value={k} className="items-center gap-2 p-2 text-center">
-                    <span
-                      className="aspect-[9/16] w-full rounded-md shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)]"
-                      style={k === 'cover' && coverUrl ? { background: `center / cover url(${coverUrl})` } : { background: `linear-gradient(180deg, ${t.top}, ${t.bottom})` }}
-                      aria-hidden
-                    />
+                    <span className="relative aspect-[9/16] w-full overflow-hidden rounded-md shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)]" aria-hidden>
+                      {k === 'cover' && coverUrl ? (
+                        <span className="absolute inset-0" style={{ background: `center / cover url(${coverUrl})` }} />
+                      ) : (
+                        <ShortBackdrop theme={k} accent={settings.look.accent} />
+                      )}
+                      {t.animated && (
+                        <span className="absolute top-1 right-1 grid size-4 place-items-center rounded-full bg-black/45 text-white backdrop-blur-sm">
+                          <Play className="size-2 fill-current" />
+                        </span>
+                      )}
+                    </span>
                     <span className="text-xs font-medium">{t.label}</span>
                   </RadioCard>
                 );
               })}
+            </RadioGroup>
+          </Field>
+          <Field label="Motion" hint="Particles over the background — the book cover too — under the title and captions.">
+            <RadioGroup value={settings.look.motion ?? 'none'} onValueChange={(v) => updateLook((d) => void (d.look.motion = v as ShortMotion))} className="grid grid-cols-3 gap-2 sm:grid-cols-6" aria-label="Motion">
+              {SHORT_MOTIONS.map((m) => (
+                <RadioCard key={m.value} value={m.value} className="items-center gap-2 p-2 text-center" title={m.hint}>
+                  <span className="relative aspect-square w-full overflow-hidden rounded-md shadow-[inset_0_0_0_1px_rgb(0_0_0/0.1)]" aria-hidden>
+                    <ShortBackdrop theme={settings.look.theme} motion={m.value} accent={settings.look.accent} coverUrl={coverUrl} still scale={0.6} />
+                  </span>
+                  <span className="text-xs font-medium">{m.label}</span>
+                </RadioCard>
+              ))}
             </RadioGroup>
           </Field>
           {settings.look.theme === 'cover' && (
