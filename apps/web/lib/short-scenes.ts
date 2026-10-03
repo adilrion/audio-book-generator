@@ -133,10 +133,10 @@ function aurora(paused: boolean, focus: number) {
     css += `@keyframes a${i}{from{transform:translateX(${i % 2 ? 90 : -90}px) skewX(${i % 2 ? -6 : 6}deg) scaleY(.92)}to{transform:translateX(${i % 2 ? -90 : 90}px) skewX(${i % 2 ? 6 : -6}deg) scaleY(1.08)}}`;
   });
   // vertical shimmer: the rays of light inside the curtains
-  defs += `<pattern id="rays" width="64" height="${H}" patternUnits="userSpaceOnUse"><rect width="64" height="${H}" fill="#fff"/><rect width="24" height="${H}" fill="#000" opacity=".4"/></pattern>`;
-  defs += `<mask id="shim"><rect class="sh" x="-128" width="${W + 256}" height="${H}" fill="url(#rays)"/></mask>`;
+  defs += `<pattern id="rays" width="96" height="${H}" patternUnits="userSpaceOnUse"><rect width="96" height="${H}" fill="#fff"/><rect width="26" height="${H}" fill="#000" opacity=".22"/><rect x="50" width="14" height="${H}" fill="#000" opacity=".14"/></pattern>`;
+  defs += `<mask id="shim"><rect class="sh" x="-192" width="${W + 384}" height="${H}" fill="url(#rays)"/></mask>`;
   body += '</g>';
-  css += '.sh{animation:sh 9s linear infinite}@keyframes sh{to{transform:translateX(64px)}}';
+  css += '.sh{animation:sh 11s linear infinite}@keyframes sh{to{transform:translateX(96px)}}';
   return svg(body + CALM, css, { paused, defs });
 }
 
@@ -255,12 +255,12 @@ function waves(paused: boolean) {
     const lam = wl * W;
     const ph = r() * TAU;
     const pts: string[] = [];
-    for (let x = -lam; x <= W + lam + 1; x += 18) {
+    for (let x = -lam; x <= W + 2 * lam; x += 18) {
       const y = h * H + amp * (0.7 * Math.sin((TAU * x) / lam + ph) + 0.3 * Math.sin((2 * TAU * x) / lam + ph * 1.3));
       pts.push(`${n(x)} ${n(y)}`);
     }
     const top = `M${pts.join('L')}`;
-    body += `<g class="w${i}"><path d="${top}L${n(W + lam)} ${H + 10}L${n(-lam)} ${H + 10}Z" fill="${fill}"/><path d="${top}" fill="none" stroke="${crest}" stroke-width="2.5"/></g>`;
+    body += `<g class="w${i}"><path d="${top}L${n(W + 2 * lam)} ${H + 10}L${n(-lam)} ${H + 10}Z" fill="${fill}"/><path d="${top}" fill="none" stroke="${crest}" stroke-width="2.5"/></g>`;
     css += `.w${i}{animation:w${i} ${n(1 / spd)}s linear infinite}@keyframes w${i}{from{transform:translateX(${n(-lam)}px)}to{transform:translateX(0)}}`;
   });
   return svg(body, css, { paused, defs });
@@ -420,4 +420,4 @@ export function motionSvg(motion: MotionKind, o: { accent: string; light?: boole
 }
 
 /** How a motion overlay is blended onto the background, in CSS and on a canvas. */
-export const motionBlend = (light: boolean) => (light ? 'multiply' : 'screen') as const;
+export const motionBlend = (light: boolean): 'multiply' | 'screen' => (light ? 'multiply' : 'screen');

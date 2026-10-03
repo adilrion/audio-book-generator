@@ -6,9 +6,10 @@ const text = (max: number) => z.string().max(max).transform((s) => s.replace(/\u
 
 export const lookSchema = z
   .object({
-    theme: z.enum(['midnight', 'sunset', 'ocean', 'forest', 'paper', 'cover']),
+    theme: z.enum(['midnight', 'sunset', 'ocean', 'forest', 'paper', 'cover', 'aurora', 'liquid', 'galaxy', 'synthwave', 'waves', 'rays']),
     captions: z.enum(['karaoke', 'box', 'word', 'plain']),
     accent: z.string().regex(/^#[0-9a-f]{6}$/i),
+    motion: z.enum(['none', 'bokeh', 'snow', 'rain', 'embers', 'sparkles']),
     position: z.enum(['center', 'lower']),
     uppercase: z.boolean(),
     showTitle: z.boolean(),

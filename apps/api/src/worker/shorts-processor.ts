@@ -66,8 +66,10 @@ export class ShortsProcessor {
       stage = s;
       last = now;
       const progress = Math.min(0.999, st.from + st.span * Math.min(1, Math.max(0, fraction)));
+      // Not awaited, so it can land after the final update: only while the short is still active,
+      // or a late "Finishing the video…" turns a finished short back into a rendering one.
       void this.prisma.short
-        .update({ where: { id: shortId }, data: { status: st.status, progress, snapshot: { stage: s, message: st.message } satisfies ShortSnapshot } })
+        .updateMany({ where: { id: shortId, status: { in: ['GENERATING_AUDIO', 'RENDERING'] } }, data: { status: st.status, progress, snapshot: { stage: s, message: st.message } satisfies ShortSnapshot } })
         .catch(() => undefined);
     };
     try {

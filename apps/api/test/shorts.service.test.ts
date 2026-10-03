@@ -85,6 +85,15 @@ describe('ShortsService', () => {
     await expect(t.svc.create({ title: 'x', script: 'y', settings: { look: { accent: 'yellow' } } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it('keeps an animated background and a motion overlay, and rejects unknown ones', async () => {
+    const t = setup();
+    const s = await t.svc.create({ title: 'T', script: SCRIPT, settings: { look: { theme: 'aurora', motion: 'embers' } } });
+    expect(s.settings.look).toMatchObject({ theme: 'aurora', motion: 'embers', captions: 'karaoke' });
+    expect((await t.svc.create({ title: 'T', script: SCRIPT })).settings.look.motion).toBeUndefined(); // older shorts keep their render key
+    await expect(t.svc.create({ title: 'x', script: 'y', settings: { look: { motion: 'confetti' } } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(t.svc.create({ title: 'x', script: 'y', settings: { look: { theme: 'disco' } } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
   it('copies the book cover when the cover background is chosen', async () => {
     const t = setup();
     const s = await t.svc.create({ title: 'T', script: SCRIPT, projectId: BOOK, settings: { look: { theme: 'cover' } } });

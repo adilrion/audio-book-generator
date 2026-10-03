@@ -8,10 +8,28 @@ import { ColorSwatches, Field, ToggleList, ToggleRow } from '@/components/settin
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { type ApiError, api, pageImageUrl, shortOutputUrl, toApiError } from '@/lib/api';
-import { SHORT_ACCENTS } from '@/lib/shorts';
+import { SHORT_ACCENTS, SHORT_THEMES } from '@/lib/shorts';
+import { isSceneTheme, motionSvg, sceneSvg, svgDataUrl } from '@/lib/short-scenes';
 import { SHORT_THUMB_LAYOUTS, type ShortThumbContent, THUMB_H, THUMB_W, defaultShortThumbnail, drawShortThumbnail, firstSentence } from '@/lib/short-thumbnail';
 import { canvasToJpeg, loadImage } from '@/lib/thumbnail';
 import { cn } from '@/lib/utils';
+
+/** An image loaded from `src` (null while loading, or without a src). */
+function useLoadedImage(src: string | undefined) {
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  useEffect(() => {
+    let live = true;
+    setImg(null);
+    if (src)
+      loadImage(src)
+        .then((i) => live && setImg(i))
+        .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [src]);
+  return img;
+}
 
 const same = (a: ShortThumbnail, b?: ShortThumbnail) => !!b && a.layout === b.layout && a.headline === b.headline && a.kicker === b.kicker && a.accent === b.accent;
 
@@ -40,6 +58,13 @@ export function ShortThumbnailDesigner({ short, busy, onChange }: { short: Short
     };
   }, [short.projectId]);
 
+  // stills of the animated background and the motion overlay (paused SVGs)
+  const look = short.settings.look;
+  const sceneUrl = isSceneTheme(look.theme) ? svgDataUrl(sceneSvg(look.theme, { paused: true })) : undefined;
+  const motionUrl = look.motion && look.motion !== 'none' ? svgDataUrl(motionSvg(look.motion, { accent: look.accent, light: !!SHORT_THEMES[look.theme]?.light, paused: true })) : undefined;
+  const scene = useLoadedImage(sceneUrl);
+  const motion = useLoadedImage(motionUrl);
+
   const content: ShortThumbContent = useMemo(
     () => ({
       title: short.title,
@@ -50,8 +75,10 @@ export function ShortThumbnailDesigner({ short, busy, onChange }: { short: Short
       bookTitle: short.bookTitle,
       author: short.bookAuthor,
       cover,
+      scene,
+      motion,
     }),
-    [short.title, short.script, short.settings.look.theme, short.settings.look.uppercase, short.language, short.bookTitle, short.bookAuthor, cover],
+    [short.title, short.script, short.settings.look.theme, short.settings.look.uppercase, short.language, short.bookTitle, short.bookAuthor, cover, scene, motion],
   );
 
   useEffect(() => {

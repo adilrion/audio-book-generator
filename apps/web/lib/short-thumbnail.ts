@@ -1,4 +1,5 @@
 import { type LanguageCode, SHORT_THUMB_SIZE, type ShortTheme, type ShortThumbLayout, type ShortThumbnail } from '@app/types';
+import { motionBlend } from './short-scenes';
 import { SHORT_THEMES } from './shorts';
 
 /**
@@ -27,6 +28,10 @@ export interface ShortThumbContent {
   bookTitle?: string;
   author?: string;
   cover: HTMLImageElement | null;
+  /** A still of the animated background (lib/short-scenes.ts), when the short has one. */
+  scene?: HTMLImageElement | null;
+  /** A still of the motion overlay, drawn over the background. */
+  motion?: HTMLImageElement | null;
 }
 
 export function defaultShortThumbnail(o: { accent: string; language: LanguageCode; hasBook: boolean }): ShortThumbnail {
@@ -101,6 +106,8 @@ function background(ctx: CanvasRenderingContext2D, c: ShortThumbContent, useCove
     ctx.filter = 'blur(48px) brightness(0.45) saturate(1.15)';
     ctx.drawImage(c.cover, (W - w) / 2, (H - h) / 2, w, h);
     ctx.restore();
+  } else if (c.scene) {
+    ctx.drawImage(c.scene, 0, 0, W, H);
   } else {
     const t = SHORT_THEMES[c.theme === 'cover' ? 'midnight' : c.theme];
     const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -110,6 +117,12 @@ function background(ctx: CanvasRenderingContext2D, c: ShortThumbContent, useCove
     ctx.fillRect(0, 0, W, H);
   }
   const light = !useCover && SHORT_THEMES[c.theme]?.light;
+  if (c.motion) {
+    ctx.save();
+    ctx.globalCompositeOperation = motionBlend(!!light);
+    ctx.drawImage(c.motion, 0, 0, W, H);
+    ctx.restore();
+  }
   const glow = ctx.createRadialGradient(W / 2, H * 0.5, 0, W / 2, H * 0.5, H * 0.45);
   glow.addColorStop(0, light ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)');
   glow.addColorStop(1, 'rgba(255,255,255,0)');
