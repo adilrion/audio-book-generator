@@ -136,18 +136,18 @@ const LABELS: Record<string, Field> = {
 
 const normLabel = (s: string) => s.toLowerCase().replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-/** "**Hook (0–3 s):** Have you…" → { field: 'script', rest: 'Have you…' }. */
-function labelOf(line: string): { field: Field; rest: string } | null {
+/** "**Hook (0–3 s):** Have you…" → { field: 'script', rest: 'Have you…', start: 17 } (where the text starts). */
+function labelOf(line: string): { field: Field; rest: string; start: number } | null {
   const m = line.match(
     /^\s*(?:[-*•>]+\s*|\d{1,2}[.)]\s+)?(?:\p{Extended_Pictographic}️?\s*)*(?:\[[^\]]{0,20}\]\s*)?[*_]*\s*([\p{L}][\p{L}\p{M} \-]{0,24}?)\s*(?:\([^)]{0,30}\))?\s*[*_]*\s*[:：]\s*[*_]*\s*(.*)$/u,
   );
   if (!m) return null;
   const field = LABELS[normLabel(m[1])];
-  return field ? { field, rest: m[2].replace(/[*_]+\s*$/, '').trim() } : null;
+  return field ? { field, rest: m[2].replace(/[*_]+\s*$/, '').trim(), start: line.length - m[2].length } : null;
 }
 
-/** "## Short 3: The lonely postmaster" → { title: 'The lonely postmaster' }; "Short 3" → { title: '' }. */
-function headingOf(line: string): { title: string } | null {
+/** "## Short 3: The lonely postmaster" → { title: 'The lonely postmaster', start: 12 }; "Short 3" → { title: '' }. */
+function headingOf(line: string): { title: string; start: number } | null {
   const m = line.match(
     /^\s*(#{1,6}\s*|[*_=]{2,}\s*|-{3,}\s*)?(?:\p{Extended_Pictographic}️?\s*)*[*_]*\s*(?:youtube\s+)?(?:shorts?|video|script|part|clip|episode|reel|idea|শর্টস?|ভিডিও|পর্ব|স্ক্রিপ্ট)\s*(?:#|no\.?\s*)?[0-9০-৯]{1,2}\s*[*_]*\s*([:.)|–—-]\s*)?(.*?)\s*[*_=#-]*\s*$/iu,
   );
@@ -156,7 +156,33 @@ function headingOf(line: string): { title: string } | null {
   const rest = m[3].replace(/^title\s*[:：]\s*/i, '').replace(/\(\s*\d+[^)]{0,20}\)/g, '');
   // A plain line ("Episode 3 is my favourite", "Part 2: it begins.") is narration, not a heading.
   if (!marked && rest.trim() && (!m[2] || line.trim().length > 90 || /[.,;]$/.test(rest.trim()))) return null;
-  return { title: cleanBatchTitle(rest) };
+  return { title: cleanBatchTitle(rest), start: m[3] ? line.lastIndexOf(m[3]) : line.length };
+}
+
+/**
+ * A second label further along a label or heading line: "Title: Stay hungry Script:" or
+ * "**Title:** X **Script:** Y". Copying an answer from a chat page often joins its lines like that.
+ * Only labels as AI tools write them (capitalised), so "the script: …" inside a sentence stays text.
+ */
+const INLINE_LABEL = /[\s*_]+((?:YouTube |Video |Full |Short )?(?:Title|Script|Voice[- ]?[Oo]ver|Narration|Description|Hashtags|Tags|Keywords)|TITLE|SCRIPT|VOICEOVER|DESCRIPTION|HASHTAGS|TAGS)[*_]*\s*[:：][*_\s]*/u;
+
+/** Put each label of a joined line on its own line (label and heading lines only, never narration). */
+function unjoin(lines: string[]): string[] {
+  const out: string[] = [];
+  for (let line of lines) {
+    for (;;) {
+      const own = labelOf(line) ?? headingOf(line);
+      if (!own) break;
+      // look after the line's own label, and only once there is some text before the next one
+      const after = line.slice(own.start);
+      const m = INLINE_LABEL.exec(after);
+      if (!m || !after.slice(0, m.index).replace(/[*_]+/g, '').trim()) break;
+      out.push(line.slice(0, own.start + m.index));
+      line = `${m[1]}: ${after.slice(m.index + m[0].length)}`;
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 const SEPARATOR = /^\s*([-*_=~])(?:\s*\1){2,}\s*$/;
@@ -172,7 +198,7 @@ interface Block {
 }
 
 function blocks(text: string): Block[] {
-  const lines = text.split('\n');
+  const lines = unjoin(text.split('\n'));
   const headed = lines.some((l) => headingOf(l));
   const out: Block[] = [];
   let cur: Block = { lines: [], marked: false };

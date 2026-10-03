@@ -36,6 +36,12 @@ export class ShortsController {
     return this.shorts.create(body);
   }
 
+  /** Several shorts and all their files (`{ ids }`); ones still rendering are stopped first. */
+  @Post('delete')
+  removeMany(@Body() body: unknown) {
+    return this.shorts.removeMany(body);
+  }
+
   /** Up to 10 shorts with one voice and look; `render` queues them one after another. */
   @Post('batch')
   createBatch(@Body() body: unknown) {

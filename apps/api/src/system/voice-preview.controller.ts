@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Controller, Get, Inject, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { createTTSProvider, ttsEngineNames } from '@app/pipeline';
+import { applyVoiceFx, createTTSProvider, ttsEngineNames } from '@app/pipeline';
+import type { ShortVoiceFx } from '@app/types';
 import { hashKey } from '@app/shared';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
 import { badRequest, notFound } from '../common/errors';
@@ -37,9 +38,15 @@ export function previewSpeed(raw: string | undefined): number {
   return Math.round(Math.min(2, Math.max(0.5, s)) * 20) / 20;
 }
 
+const TONES: ShortVoiceFx[] = ['natural', 'deep', 'powerful'];
+
+/** A Shorts voice tone from the query (anything else: natural). */
+export const previewFx = (raw: string | undefined): ShortVoiceFx => (TONES.includes(raw as ShortVoiceFx) ? (raw as ShortVoiceFx) : 'natural');
+
 /**
- * GET /system/voices/preview?engine=kokoro&voice=af_heart&speed=1&language=en — a few seconds of the voice,
- * as WAV. Synthesized once per (engine, voice, speed, text) and kept in storage/audio/previews.
+ * GET /system/voices/preview?engine=kokoro&voice=af_heart&speed=1&language=en[&fx=deep] — a few seconds
+ * of the voice, as WAV. Synthesized once per (engine, voice, speed, text) and kept in
+ * storage/audio/previews; a Shorts tone (`fx`) is a filtered copy of that sample.
  */
 @Controller('system/voices')
 export class VoicePreviewController {
@@ -57,14 +64,15 @@ export class VoicePreviewController {
     @Query('voice') voice: string | undefined,
     @Query('speed') speed: string | undefined,
     @Query('language') language: string | undefined,
+    @Query('fx') fx: string | undefined,
     @Res() res: Response,
   ) {
-    const file = await this.sample(engine ?? this.cfg.TTS_ENGINE, voice ?? '', previewSpeed(speed), language);
+    const file = await this.sample(engine ?? this.cfg.TTS_ENGINE, voice ?? '', previewSpeed(speed), language, previewFx(fx));
     res.setHeader('Cache-Control', 'private, max-age=86400');
     res.type('audio/wav').sendFile(file, { acceptRanges: true });
   }
 
-  async sample(engine: string, voice: string, speed: number, projectLanguage?: string): Promise<string> {
+  async sample(engine: string, voice: string, speed: number, projectLanguage?: string, fx: ShortVoiceFx = 'natural'): Promise<string> {
     const engines = ttsEngineNames();
     if (!engines.includes(engine)) throw badRequest(`Unknown voice engine "${engine.slice(0, 40)}".`, `Choose one of: ${engines.join(', ')}.`);
     if (!voice || voice.length > 200) throw badRequest('Choose a voice to preview.');
@@ -83,17 +91,24 @@ export class VoicePreviewController {
     const sampleRate = this.cfg.TTS_SAMPLE_RATE;
     const key = hashKey('voice-preview-v1', engine, provider.version, info.id, speed, engineLanguage, text, sampleRate);
     const file = path.join(this.cfg.storage.audio, 'previews', `${key}.wav`);
-    if (fs.existsSync(file)) return file;
+    await this.once(key, file, async () => {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await provider.synthesize(text, { voice: info.id, speed, language: engineLanguage, sampleRate, outPath: file });
+    });
+    if (fx === 'natural') return file;
+    const toned = path.join(this.cfg.storage.audio, 'previews', `${key}-${fx}.wav`);
+    await this.once(`${key}-${fx}`, toned, () => applyVoiceFx(this.cfg, file, toned, fx));
+    return toned;
+  }
 
+  /** Make `file` with `make` unless it exists — once, however many requests ask for it at the same time. */
+  private async once(key: string, file: string, make: () => Promise<void>): Promise<void> {
+    if (fs.existsSync(file)) return;
     let job = this.pending.get(key);
     if (!job) {
-      job = (async () => {
-        await fs.promises.mkdir(path.dirname(file), { recursive: true });
-        await provider.synthesize(text, { voice: info.id, speed, language: engineLanguage, sampleRate, outPath: file });
-      })().finally(() => this.pending.delete(key));
+      job = make().finally(() => this.pending.delete(key));
       this.pending.set(key, job);
     }
     await job;
-    return file;
   }
 }

@@ -1,4 +1,4 @@
-import { type JobStatus, type LanguageCode, SHORT_IDEAL_SEC, SHORT_MAX_SEC, type ShortCaptionStyle, type ShortMotion, type ShortScriptStyle, type ShortTheme, estimateShortSec, fitTags } from '@app/types';
+import { type JobStatus, type LanguageCode, SHORT_IDEAL_SEC, SHORT_MAX_SEC, type ShortCaptionStyle, type ShortMotion, type ShortScriptStyle, type ShortTheme, type ShortVoiceFx, estimateShortSec, fitTags } from '@app/types';
 
 /**
  * The renderer's backgrounds (workers/processing/audiobook_worker/shorts/render.py and scenes.py),
@@ -28,6 +28,16 @@ export const SHORT_MOTIONS: { value: ShortMotion; label: string; hint: string }[
   { value: 'snow', label: 'Snow', hint: 'Flakes drifting down' },
   { value: 'rain', label: 'Rain', hint: 'Slanted streaks, moody' },
 ];
+
+/** The narrator's tone (applied when the audio is mastered; the length and captions do not change). */
+export const SHORT_VOICE_FX: { value: ShortVoiceFx; label: string; hint: string }[] = [
+  { value: 'natural', label: 'Natural', hint: 'The voice as it is' },
+  { value: 'deep', label: 'Deep', hint: 'Lower and warmer' },
+  { value: 'powerful', label: 'Deep & powerful', hint: 'Much lower, strong bass, a little echo — for motivation' },
+];
+
+/** "Deep motivation": a deep male narrator (English), a little slower, in the powerful tone. */
+export const DEEP_VOICE = { engine: 'kokoro', voice: 'am_onyx', speed: 0.92, fx: 'powerful' } as const;
 
 export const CAPTION_STYLES: { value: ShortCaptionStyle; label: string; hint: string }[] = [
   { value: 'karaoke', label: 'Karaoke', hint: 'A few words, the spoken one in colour' },

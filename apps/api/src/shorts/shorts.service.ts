@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma, type Short } from '@prisma/client';
 import { CachePaths, OllamaProvider, type ShortScriptSource, canNarrate, generateShortMetadata, generateShortScript, isFrontMatterTitle, shortImages, shortRenderKey, voiceAfterChange } from '@app/pipeline';
-import { AppError, atomicWrite, ensureDir, exists, formatDuration, rmrf } from '@app/shared';
+import { AppError, atomicWrite, dirSize, ensureDir, exists, formatDuration, rmrf } from '@app/shared';
 import {
   DEFAULT_SHORT_LOOK,
   SHORT_MAX_SEC,
@@ -20,6 +20,7 @@ import {
   type ShortSettings,
   type ShortSummary,
   type ShortThumbnail,
+  type ShortsDeleteResult,
   type UserFacingError,
 } from '@app/types';
 import { APP_CONFIG, type AppConfig } from '../common/config.provider';
@@ -27,7 +28,7 @@ import { badRequest, cannotNarrate, conflict, notFound } from '../common/errors'
 import { PrismaService } from '../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
 import { QueueService } from '../queue/queue.service';
-import { batchSchema, issues, metadataSchema, scriptRequestSchema, shortInputSchema, shortSettingsSchema, shortUpdateSchema } from './shorts.schema';
+import { batchSchema, deleteSchema, issues, metadataSchema, scriptRequestSchema, shortInputSchema, shortSettingsSchema, shortUpdateSchema } from './shorts.schema';
 
 /** While one of these, a short is being worked on. */
 export const SHORT_ACTIVE: JobStatus[] = ['GENERATING_AUDIO', 'RENDERING'];
@@ -71,7 +72,7 @@ export class ShortsService {
   resolve(raw: unknown): ShortSettings {
     const d = this.defaults();
     const s = (raw ?? {}) as Partial<ShortSettings>;
-    return { language: s.language ?? d.language, tts: { ...d.tts, ...s.tts }, look: { ...d.look, ...s.look } };
+    return { language: s.language ?? d.language, tts: { ...d.tts, ...s.tts }, ...(s.voiceFx && { voiceFx: s.voiceFx }), look: { ...d.look, ...s.look } };
   }
 
   /** Validated settings merged over `base`; the project rules for language and voice apply. */
@@ -79,7 +80,8 @@ export class ShortsService {
     const parsed = shortSettingsSchema.safeParse(raw ?? {});
     if (!parsed.success) throw badRequest(`Invalid settings: ${issues(parsed.error)}`);
     const p = parsed.data;
-    const merged: ShortSettings = { language: (p.language ?? base.language) as LanguageCode, tts: { ...base.tts, ...p.tts }, look: { ...base.look, ...p.look } };
+    const voiceFx = p.voiceFx ?? base.voiceFx;
+    const merged: ShortSettings = { language: (p.language ?? base.language) as LanguageCode, tts: { ...base.tts, ...p.tts }, ...(voiceFx && { voiceFx }), look: { ...base.look, ...p.look } };
     merged.tts = voiceAfterChange(p, merged);
     if (!canNarrate(merged.tts.engine, merged.language)) throw cannotNarrate(merged.tts.engine, merged.language);
     return merged;
@@ -338,6 +340,54 @@ export class ShortsService {
     await this.prisma.short.delete({ where: { id } });
     await rmrf(this.paths.short(id));
     return { ok: true };
+  }
+
+  /**
+   * Delete several shorts with everything they keep on disk — video, subtitles, thumbnail, cover and
+   * the cached narration and render files, all in the short's folder. Queued ones are taken off the
+   * queue; ones still rendering are stopped first, and one that has not stopped after a few seconds
+   * is kept (and reported) rather than deleted under the worker's feet.
+   */
+  async removeMany(body: unknown, stopWaitMs = 15_000): Promise<ShortsDeleteResult> {
+    const parsed = deleteSchema.safeParse(body);
+    if (!parsed.success) throw badRequest(`Invalid request: ${issues(parsed.error)}`);
+    const ids = [...new Set(parsed.data.ids)];
+    const rows = await this.prisma.short.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, status: true } });
+    const rendering = rows.filter((r) => SHORT_ACTIVE.includes(r.status)).map((r) => r.id);
+    for (const id of rendering) await this.prisma.short.update({ where: { id }, data: { cancelRequested: true } }).catch(() => undefined);
+    const stuck = await this.waitUntilStopped(rendering, stopWaitMs);
+
+    const result: ShortsDeleteResult = { deleted: [], skipped: [], freedBytes: 0 };
+    for (const r of rows) {
+      if (stuck.has(r.id)) {
+        result.skipped.push({ id: r.id, title: r.title, reason: 'It was still stopping — try again in a moment.' });
+        continue;
+      }
+      const dir = this.paths.short(r.id);
+      result.freedBytes += await dirSize(dir).catch(() => 0);
+      // A queued render finds no row and is skipped by the worker.
+      await this.prisma.short.delete({ where: { id: r.id } }).catch(() => undefined);
+      await rmrf(dir);
+      // A render that was just stopped may still be finishing a file: sweep again once it is gone.
+      if (rendering.includes(r.id)) setTimeout(() => void rmrf(dir).catch(() => undefined), 5000).unref();
+      result.deleted.push(r.id);
+    }
+    // Already gone counts as deleted, so a retry after a dropped answer is harmless.
+    for (const id of ids) if (!rows.some((r) => r.id === id)) result.deleted.push(id);
+    if (result.deleted.length) this.log.log(`Deleted ${result.deleted.length} short(s), freed ${(result.freedBytes / 1e6).toFixed(1)} MB`);
+    return result;
+  }
+
+  /** The ids among `ids` that are still rendering after `ms` (the worker checks for a cancel every 1.5 s). */
+  private async waitUntilStopped(ids: string[], ms: number): Promise<Set<string>> {
+    let left = new Set(ids);
+    const end = Date.now() + ms;
+    while (left.size && Date.now() < end) {
+      await new Promise((r) => setTimeout(r, 400));
+      const rows = await this.prisma.short.findMany({ where: { id: { in: [...left] } }, select: { id: true, status: true } });
+      left = new Set(rows.filter((r) => SHORT_ACTIVE.includes(r.status)).map((r) => r.id));
+    }
+    return left;
   }
 
   /** The cover background: the book's first page, copied so the short keeps it if the book is deleted. */

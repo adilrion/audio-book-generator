@@ -1,7 +1,7 @@
 'use client';
 
-import type { LanguageCode, ProjectSummary, ShortMotion, ShortSettings, ShortTheme } from '@app/types';
-import { Captions, Play } from 'lucide-react';
+import type { LanguageCode, ProjectSummary, ShortMotion, ShortSettings, ShortTheme, ShortVoiceFx } from '@app/types';
+import { AudioLines, Captions, Check, Play } from 'lucide-react';
 import { useId } from 'react';
 import { CheckedMark, ColorSwatches, Field, ToggleList, ToggleRow, VoiceFields } from '@/components/settings-form';
 import { ShortBackdrop } from '@/components/short-preview';
@@ -10,13 +10,47 @@ import { Segmented, SegmentedItem } from '@/components/ui/segmented';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import type { SystemConfig } from '@/lib/api';
-import { CAPTION_STYLES, SHORT_ACCENTS, SHORT_MOTIONS, SHORT_THEMES } from '@/lib/shorts';
+import { Button } from '@/components/ui/button';
+import { CAPTION_STYLES, DEEP_VOICE, SHORT_ACCENTS, SHORT_MOTIONS, SHORT_THEMES, SHORT_VOICE_FX } from '@/lib/shorts';
 import { applyLanguage } from '@/lib/voices';
 
-/** A short's narration: language, voice and speed (the editor and the batch page). */
+/** A short's narration: language, voice, speed and tone (the editor and the batch page). */
 export function ShortVoiceFields({ settings, config, update }: { settings: ShortSettings; config?: SystemConfig; update: (fn: (d: ShortSettings) => void) => void }) {
+  const fx = settings.voiceFx ?? 'natural';
+  // The deep male voice is an English Kokoro voice; in Bangla the preset is the tone and pace alone.
+  const deepVoice = settings.language === 'en' && (config?.engines ?? ['kokoro']).includes(DEEP_VOICE.engine);
+  const deepInUse = fx === DEEP_VOICE.fx && settings.tts.speed === DEEP_VOICE.speed && (!deepVoice || settings.tts.voice === DEEP_VOICE.voice);
+  const useDeep = () =>
+    update((d) => {
+      if (deepVoice) {
+        d.tts.engine = DEEP_VOICE.engine;
+        d.tts.voice = DEEP_VOICE.voice;
+      }
+      d.tts.speed = DEEP_VOICE.speed;
+      d.voiceFx = DEEP_VOICE.fx;
+    });
   return (
     <>
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed bg-muted/40 px-4 py-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-foreground text-background">
+          <AudioLines className="size-4" aria-hidden />
+        </span>
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <p className="text-sm font-medium">Deep motivation voice</p>
+          <p className="text-xs text-muted-foreground">
+            {deepVoice ? 'Onyx — a deep male narrator — a little slower, in the deep & powerful tone.' : 'The deep & powerful tone, a little slower.'}
+          </p>
+        </div>
+        <Button size="sm" variant={deepInUse ? 'ghost' : 'outline'} onClick={useDeep} disabled={deepInUse}>
+          {deepInUse ? (
+            <>
+              <Check aria-hidden /> In use
+            </>
+          ) : (
+            'Use it'
+          )}
+        </Button>
+      </div>
       <Field label="Language" className="sm:max-w-md">
         <Select value={settings.language} onValueChange={(l) => update((d) => applyLanguage(d, l as LanguageCode, config))}>
           <SelectTrigger className="h-10">
@@ -33,7 +67,7 @@ export function ShortVoiceFields({ settings, config, update }: { settings: Short
           </SelectContent>
         </Select>
       </Field>
-      <VoiceFields settings={settings} config={config} update={update} />
+      <VoiceFields settings={settings} config={config} update={update} fx={fx} />
       <Field
         label={
           <>
@@ -45,6 +79,17 @@ export function ShortVoiceFields({ settings, config, update }: { settings: Short
         hint="Shorts are often read a little faster, around 1.1×."
       >
         <Slider min={0.5} max={2} step={0.05} value={[settings.tts.speed]} onValueChange={([s]) => update((d) => void (d.tts.speed = Math.round(s * 100) / 100))} aria-label="Narration speed" />
+      </Field>
+      <Field label="Tone" hint="Applied to the narration when the video is made — its length and the captions stay the same. Listen plays the voice in this tone.">
+        <RadioGroup value={fx} onValueChange={(v) => update((d) => void (d.voiceFx = v as ShortVoiceFx))} className="grid gap-2 sm:grid-cols-3" aria-label="Tone">
+          {SHORT_VOICE_FX.map((t) => (
+            <RadioCard key={t.value} value={t.value} className="pr-8">
+              <CheckedMark />
+              <span className="font-medium">{t.label}</span>
+              <span className="text-xs leading-snug text-muted-foreground">{t.hint}</span>
+            </RadioCard>
+          ))}
+        </RadioGroup>
       </Field>
     </>
   );

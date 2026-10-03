@@ -377,7 +377,20 @@ export function LookPreview({ settings, className }: { settings: ProjectSettings
 /** What the voice picker reads and changes: a project's or a short's language and voice. */
 export type VoiceSettings = Pick<ProjectSettings, 'language' | 'tts'>;
 
-export function VoiceFields<S extends VoiceSettings>({ settings, config, disabled, update }: { settings: S; config?: SystemConfig; disabled?: boolean; update: (fn: (d: S) => void) => void }) {
+export function VoiceFields<S extends VoiceSettings>({
+  settings,
+  config,
+  disabled,
+  fx,
+  update,
+}: {
+  settings: S;
+  config?: SystemConfig;
+  disabled?: boolean;
+  /** A Shorts tone, so Listen plays the voice as the short will sound. */
+  fx?: string;
+  update: (fn: (d: S) => void) => void;
+}) {
   const engine = settings.tts.engine;
   const voices = useApi(`voices:${engine}`, (signal) => api.voices(engine, signal));
   const engines: TTSEngineName[] = config?.engines?.length ? config.engines : ['kokoro', 'piper', 'say'];
@@ -443,7 +456,7 @@ export function VoiceFields<S extends VoiceSettings>({ settings, config, disable
         htmlFor={voiceId}
         className="sm:max-w-md"
       >
-        <VoicePreview engine={engine} voice={selectedVoice} speed={settings.tts.speed} language={settings.language} disabled={disabled}>
+        <VoicePreview engine={engine} voice={selectedVoice} speed={settings.tts.speed} language={settings.language} fx={fx} disabled={disabled}>
           <Select value={selectedVoice} disabled={disabled || !list.length} onValueChange={(v) => update((d) => void (d.tts.voice = v))}>
             <SelectTrigger id={voiceId} className="h-10">
               <SelectValue placeholder={voices.loading ? 'Loading voices…' : unavailable ? 'Engine not installed' : currentVoice || 'Choose a voice'} />

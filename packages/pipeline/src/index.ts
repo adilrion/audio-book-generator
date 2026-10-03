@@ -17,6 +17,7 @@ export * from './tts/types';
 export * from './tts/python-provider';
 export * from './tts/registry';
 export * from './audio/ffmpeg';
+export * from './audio/voice-fx';
 export * from './timeline/build';
 export * from './timeline/subtitles';
 export * from './timeline/words';

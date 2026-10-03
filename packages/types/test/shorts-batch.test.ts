@@ -65,6 +65,27 @@ Let me know if you'd like more scripts or a different tone!`;
     expect(r.items[2].script).toBe('It is written.\nMaktub.'); // the chatter after the last short is gone
   });
 
+  it('splits labels that copying from a chat page joined onto one line', () => {
+    const r = parseShortBatch(`Title: One Day, You Will Miss This Moment Script:
+One day, you might look back at the life you have today.
+Description: Live in the present. Hashtags: #Shorts #Motivation
+
+**Title:** Nobody Is Coming to Save You **Script:** Stop waiting for someone to change your life. **Description:** Take responsibility.`);
+    expect(r.items.map((i) => i.title)).toEqual(['One Day, You Will Miss This Moment', 'Nobody Is Coming to Save You']);
+    expect(r.items[0]).toMatchObject({ script: 'One day, you might look back at the life you have today.', description: 'Live in the present.', hashtags: ['Shorts', 'Motivation'] });
+    expect(r.items[1]).toMatchObject({ script: 'Stop waiting for someone to change your life.', description: 'Take responsibility.' });
+    expect(parseShortBatch('## Short 1: Stay hungry Script:\nKeep going.').items[0]).toMatchObject({ title: 'Stay hungry', script: 'Keep going.' });
+    // exactly what ChatGPT gave for our prompt (blank lines between the parts)
+    const chat = parseShortBatch('## Short 1\n\nTitle: Nobody Is Coming to Save You Script:\n\nStop waiting for someone to change your life.\n\nDescription: Your life changes.\n\nHashtags: #Shorts #DeepMotivation\n\nTags: deep motivational speech, self discipline\n\n## Short 2\n\nTitle: Your Worst Days Are Not Your Whole Story Script:\n\nOne bad chapter does not mean you have a bad life.');
+    expect(chat.items.map((i) => [i.title, i.script])).toEqual([
+      ['Nobody Is Coming to Save You', 'Stop waiting for someone to change your life.'],
+      ['Your Worst Days Are Not Your Whole Story', 'One bad chapter does not mean you have a bad life.'],
+    ]);
+    expect(chat.items[0]).toMatchObject({ description: 'Your life changes.', hashtags: ['Shorts', 'DeepMotivation'], tags: ['deep motivational speech', 'self discipline'] });
+    // narration that mentions a label is left alone
+    expect(parseShortBatch('Script:\nI read the script: it was perfect.').items[0].script).toBe('I read the script: it was perfect.');
+  });
+
   it('reads numbered "1. Title:" lists without headings (Gemini style)', () => {
     const text = `1. **Title:** Why we fear change
    **Script:** Change is scary. Here is why.

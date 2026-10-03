@@ -19,6 +19,7 @@ import type {
   PublishDraft,
   PublishState,
   ShortBatchRequest,
+  ShortsDeleteResult,
   ShortBatchResult,
   ShortDetail,
   ShortMetadataRequest,
@@ -231,6 +232,8 @@ export const api = {
   renderShort: (id: string) => request<{ jobId: string }>(`/shorts/${encodeURIComponent(id)}/render`, { method: 'POST' }),
   cancelShort: (id: string) => request<{ ok: boolean }>(`/shorts/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   deleteShort: (id: string) => request<{ ok: boolean }>(`/shorts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Several shorts with all their files; ones still rendering are stopped first. */
+  deleteShorts: (ids: string[]) => request<ShortsDeleteResult>('/shorts/delete', json('POST', { ids })),
   /** Local AI writes a script (20–60 s). Aborting the signal stops the model. Nothing is saved. */
   generateShortScript: (body: ShortScriptRequest, signal?: AbortSignal) => request<ShortScriptResult>('/shorts/script', { ...json('POST', body), signal }),
   /** Local AI writes the YouTube description, hashtags and tags for a script. Nothing is saved. */
@@ -270,9 +273,9 @@ export const shortOutputUrl = (id: string, name: string, opts: { inline?: boolea
 
 export const pageImageUrl = (id: string, page: number) => `${API_URL}/projects/${encodeURIComponent(id)}/pages/${page}/image`;
 
-/** A few seconds of a voice (WAV), read at the given speed; the sample is in the voice's own language. */
-export const voicePreviewUrl = (engine: string, voice: string, speed: number, language: string) =>
-  `${API_URL}/system/voices/preview?${new URLSearchParams({ engine, voice, speed: speed.toFixed(2), language })}`;
+/** A few seconds of a voice (WAV), read at the given speed — in a Shorts tone with `fx`; the sample is in the voice's own language. */
+export const voicePreviewUrl = (engine: string, voice: string, speed: number, language: string, fx?: string) =>
+  `${API_URL}/system/voices/preview?${new URLSearchParams({ engine, voice, speed: speed.toFixed(2), language, ...(fx && fx !== 'natural' && { fx }) })}`;
 
 export interface UploadHandle {
   promise: Promise<ProjectDetail>;

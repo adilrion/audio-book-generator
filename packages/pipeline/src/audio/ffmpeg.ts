@@ -3,6 +3,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { AppConfig } from '@app/config';
 import { AppError, CancelledError, atomicWrite, ensureDir } from '@app/shared';
+import type { ShortVoiceFx } from '@app/types';
+import { voiceFxFilter } from './voice-fx';
 
 export interface FfmpegRunOptions {
   signal?: AbortSignal;
@@ -98,7 +100,19 @@ export async function masterAudio(
   cfg: AppConfig,
   inputs: string[],
   outFile: string,
-  o: { normalize: boolean; title: string; chapters: ChapterMark[]; workDir: string; language?: string; signal?: AbortSignal; onTime?: (s: number) => void },
+  o: {
+    normalize: boolean;
+    title: string;
+    chapters: ChapterMark[];
+    workDir: string;
+    language?: string;
+    signal?: AbortSignal;
+    onTime?: (s: number) => void;
+    /** A voice tone (Shorts). */
+    voiceFx?: ShortVoiceFx;
+    /** Cut to this length (a tone's echo tail would outlast the video). */
+    trimTo?: number;
+  },
 ): Promise<void> {
   await ensureDir(o.workDir);
   const list = await writeConcatList(path.join(o.workDir, 'audio-concat.txt'), inputs);
@@ -106,7 +120,9 @@ export async function masterAudio(
   await atomicWrite(meta, ffmetadata(o.title, o.chapters));
   const codec = await pickAudioEncoder(cfg);
   const tmp = `${outFile}.tmp.m4a`;
-  const filters = [o.normalize ? 'loudnorm=I=-16:TP=-1.5:LRA=11' : null, 'aresample=48000'].filter(Boolean).join(',');
+  const filters = [voiceFxFilter(o.voiceFx), o.trimTo ? `atrim=end=${o.trimTo.toFixed(3)}` : null, o.normalize ? 'loudnorm=I=-16:TP=-1.5:LRA=11' : null, 'aresample=48000']
+    .filter(Boolean)
+    .join(',');
   await run(
     cfg.FFMPEG_BIN,
     ['-hide_banner', '-y', '-nostats', '-progress', 'pipe:2', '-f', 'concat', '-safe', '0', '-i', list, '-i', meta,

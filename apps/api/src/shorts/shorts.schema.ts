@@ -32,6 +32,7 @@ export const shortSettingsSchema = z
   .object({
     language: z.enum(['en', 'bn']),
     tts: z.object({ engine: z.enum(['kokoro', 'piper', 'say']), voice: z.string().min(1).max(200), speed: z.number().min(0.5).max(2) }).partial(),
+    voiceFx: z.enum(['natural', 'deep', 'powerful']),
     look: lookSchema,
   })
   .partial();
@@ -53,6 +54,9 @@ export const shortInputSchema = z.object({
 });
 
 export const shortUpdateSchema = shortInputSchema.partial();
+
+/** POST /shorts/delete */
+export const deleteSchema = z.object({ ids: z.array(z.string().regex(/^[a-z0-9-]{1,64}$/i)).min(1, 'is empty').max(200) });
 
 /** POST /shorts/batch: several shorts with one voice and look (each may change its background). */
 export const batchSchema = z.object({

@@ -15,10 +15,27 @@ let stopCurrent: (() => void) | undefined;
  * chosen speed. The first sample of a voice is synthesized locally (a few seconds, longer while the engine
  * loads); after that the browser and the API cache it.
  */
-export function VoicePreview({ engine, voice, speed, language, disabled, children }: { engine: string; voice?: string; speed: number; language: string; disabled?: boolean; children: ReactNode }) {
+export function VoicePreview({
+  engine,
+  voice,
+  speed,
+  language,
+  fx,
+  disabled,
+  children,
+}: {
+  engine: string;
+  voice?: string;
+  speed: number;
+  language: string;
+  /** A Shorts tone (deep, powerful). */
+  fx?: string;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
   const [state, setState] = useState<State>({ kind: 'idle' });
   const stopRef = useRef<() => void>(undefined);
-  const url = voice ? voicePreviewUrl(engine, voice, speed, language) : undefined;
+  const url = voice ? voicePreviewUrl(engine, voice, speed, language, fx) : undefined;
 
   // Another voice or speed: stop the old sample and forget its error.
   useEffect(() => {

@@ -31,7 +31,7 @@ function setup(opts: { enqueueFails?: boolean } = {}) {
       const r = rows.find((x) => x.id === where.id);
       return r ? { ...r, project: r.projectId ? { name: 'The Postmaster', document: { author: 'Tagore, Rabindranath' } } : null } : null;
     },
-    findMany: async () => rows.map((r) => ({ ...r, project: null })),
+    findMany: async ({ where }: { where?: { id?: { in?: string[] } } } = {}) => rows.filter((r) => !where?.id?.in || where.id.in.includes(r.id as string)).map((r) => ({ ...r, project: null })),
     // Like Prisma: the DbNull sentinel is stored as NULL.
     update: async ({ where, data }: { where: Row; data: Row }) =>
       Object.assign(rows.find((x) => x.id === where.id)!, Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === Prisma.DbNull ? null : v]))),
@@ -87,6 +87,16 @@ describe('ShortsService', () => {
     await expect(t.svc.create({ title: 'x', script: 'y', settings: { look: { accent: 'yellow' } } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it('keeps a voice tone, and leaves it out when none was chosen', async () => {
+    const t = setup();
+    const s = await t.svc.create({ title: 'T', script: SCRIPT, settings: { voiceFx: 'powerful' } });
+    expect(s.settings.voiceFx).toBe('powerful');
+    const u = await t.svc.update(s.id, { settings: { look: { theme: 'aurora' } } });
+    expect(u.settings.voiceFx).toBe('powerful'); // kept when something else changes
+    expect('voiceFx' in (await t.svc.create({ title: 'T', script: SCRIPT })).settings).toBe(false);
+    await expect(t.svc.create({ title: 'x', script: 'y', settings: { voiceFx: 'robot' } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
   it('keeps an animated background and a motion overlay, and rejects unknown ones', async () => {
     const t = setup();
     const s = await t.svc.create({ title: 'T', script: SCRIPT, settings: { look: { theme: 'aurora', motion: 'embers' } } });
@@ -139,6 +149,43 @@ describe('ShortsService', () => {
     expect(r.shorts).toHaveLength(2);
     expect(r.error).toMatchObject({ retryable: true });
     expect(t.queue.enqueueShort).toHaveBeenCalledTimes(1); // stops at the first failure
+  });
+
+  it('deletes several shorts with all their files, stopping a render first', async () => {
+    fs.rmSync(cfg.storage.shorts, { recursive: true, force: true }); // the fake ids repeat across tests
+    const t = setup();
+    const a = await t.svc.create({ title: 'a', script: SCRIPT });
+    const b = await t.svc.create({ title: 'b', script: SCRIPT });
+    const keep = await t.svc.create({ title: 'keep', script: SCRIPT });
+    for (const s of [a, b, keep]) {
+      const dir = path.join(cfg.storage.shorts, s.id);
+      fs.mkdirSync(path.join(dir, '.work'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'short.mp4'), Buffer.alloc(1000));
+      fs.writeFileSync(path.join(dir, '.work', 'narration-1.flac'), Buffer.alloc(500)); // the narration cache
+    }
+    const rowB = t.rows.find((r) => r.id === b.id)!;
+    rowB.status = 'RENDERING';
+    setTimeout(() => (rowB.status = rowB.cancelRequested ? 'CANCELLED' : 'RENDERING'), 150); // the worker stops
+
+    const r = await t.svc.removeMany({ ids: [a.id, b.id, a.id, '99999999-9999-4999-8999-999999999999'] });
+    expect(r.deleted.sort()).toEqual([a.id, b.id, '99999999-9999-4999-8999-999999999999'].sort());
+    expect(r).toMatchObject({ skipped: [], freedBytes: 3000 });
+    expect(t.rows.map((x) => x.id)).toEqual([keep.id]);
+    expect(fs.existsSync(path.join(cfg.storage.shorts, a.id))).toBe(false);
+    expect(fs.existsSync(path.join(cfg.storage.shorts, b.id))).toBe(false);
+    expect(fs.existsSync(path.join(cfg.storage.shorts, keep.id, 'short.mp4'))).toBe(true);
+  });
+
+  it('keeps a short that does not stop rendering in time, and rejects a bad request', async () => {
+    const t = setup();
+    const s = await t.svc.create({ title: 'busy', script: SCRIPT });
+    t.rows[0].status = 'RENDERING';
+    const r = await t.svc.removeMany({ ids: [s.id] }, 50);
+    expect(r.deleted).toEqual([]);
+    expect(r.skipped).toEqual([{ id: s.id, title: 'busy', reason: expect.stringContaining('try again') }]);
+    expect(t.rows).toHaveLength(1);
+    await expect(t.svc.removeMany({ ids: [] })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(t.svc.removeMany({ ids: ['../etc'] })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('reads a later part of the book for a batch', async () => {

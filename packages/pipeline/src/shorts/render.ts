@@ -140,7 +140,17 @@ export async function renderShort(cfg: AppConfig, input: ShortRenderInput, o: Sh
 
   // ── audio ──
   const audio = path.join(work, 'audio.m4a');
-  await masterAudio(cfg, [flac], audio, { normalize: true, title: input.title, chapters: [], workDir: work, language, signal: o.signal });
+  const voiceFx = input.settings.voiceFx;
+  await masterAudio(cfg, [flac], audio, {
+    normalize: true,
+    title: input.title,
+    chapters: [],
+    workDir: work,
+    language,
+    signal: o.signal,
+    voiceFx,
+    trimTo: voiceFx && voiceFx !== 'natural' ? narration.duration : undefined,
+  });
   progress('audio', 1);
 
   // ── captions + video ──

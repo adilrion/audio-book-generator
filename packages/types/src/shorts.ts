@@ -28,6 +28,13 @@ export type ShortTheme =
   | 'waves'
   | 'rays';
 
+/**
+ * The narrator's tone, applied to the voice when the audio is mastered: `deep` lowers it about two
+ * semitones; `powerful` lowers it further, with a strong low end, compression and a short echo — the
+ * "deep motivation" sound. The length does not change, so captions stay in sync.
+ */
+export type ShortVoiceFx = 'natural' | 'deep' | 'powerful';
+
 /** Particles drawn over any background (the cover too), under the title and captions. */
 export type ShortMotion = 'none' | 'bokeh' | 'snow' | 'rain' | 'embers' | 'sparkles';
 
@@ -80,6 +87,8 @@ export const SHORT_THUMB_SIZE = { width: 1080, height: 1920 } as const;
 export interface ShortSettings {
   language: LanguageCode;
   tts: TTSSettings;
+  /** Left out: natural (so older shorts keep their render key). */
+  voiceFx?: ShortVoiceFx;
   look: ShortLook;
 }
 
@@ -149,6 +158,15 @@ export interface ShortDetail extends ShortSummary {
   outputs: OutputFile[];
   /** The script or settings changed since the video was rendered. */
   stale: boolean;
+}
+
+/** POST /shorts/delete: what was removed (with all its files), and what was kept. */
+export interface ShortsDeleteResult {
+  deleted: string[];
+  /** Shorts that were still rendering and did not stop in time. */
+  skipped: { id: string; title: string; reason: string }[];
+  /** Disk space given back: videos, thumbnails and cached narration. */
+  freedBytes: number;
 }
 
 /** How the local AI should write the script. */
